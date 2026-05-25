@@ -3,7 +3,10 @@
 # 使い方: PowerShell に次の1行を貼って Enter するだけ
 #   irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 | iex
 # ============================================================
-$ErrorActionPreference = "Stop"
+# gh / git / npm などの外部コマンドは標準エラーへ進捗や通知を書く。
+# "Stop" だとそれだけで NativeCommandError になり途中で止まるため "Continue" にする。
+# 重要な工程は後段で終了コード($LASTEXITCODE)を見て個別に判定する。
+$ErrorActionPreference = "Continue"
 
 # --- 実行ポリシー対策 ---
 # Windows では npm / claude の実体が .ps1（PowerShellスクリプト）のため、
@@ -44,12 +47,22 @@ Write-Host "==> 2/4 Claude Code を入れています" -ForegroundColor Cyan
 # npm.ps1 ではなく npm.cmd を直接呼ぶ（スクリプト実行が無効でも動く）
 Invoke-Cli npm @("install","-g","@anthropic-ai/claude-code")
 Refresh-Path
+if (-not (Get-Command claude.cmd,claude.exe,claude -ErrorAction SilentlyContinue)) {
+  Write-Host "  ! Claude Code の導入に失敗した可能性があります。上のログを確認してください。" -ForegroundColor Red
+}
 
 Write-Host ""
 Write-Host "==> 3/4 GitHub にログインします。ブラウザが開いたら、許可された GitHub アカウントでログインしてください" -ForegroundColor Cyan
+# 未ログインだと gh auth status は stderr に出力し終了コード非0（EAP=Continue なので止まらない）
 gh auth status 2>$null
 if ($LASTEXITCODE -ne 0) { gh auth login --hostname github.com --git-protocol https --web }
 gh auth setup-git
+# ログインできていないと private リポジトリの取り込みに失敗するので、ここで確認する
+gh auth status 2>$null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "  ! GitHub にログインできていません。もう一度この1行を実行してログインしてください。" -ForegroundColor Red
+  return
+}
 
 Write-Host ""
 Write-Host "==> 4/4 道具箱（daimaru-skills）を取り込んでいます" -ForegroundColor Cyan
@@ -60,6 +73,12 @@ if (-not (Test-Path "$HOME\daimaru-skills")) {
   Write-Host "    既に取り込み済みです。最新へ更新します" -ForegroundColor DarkGray
   Set-Location "$HOME\daimaru-skills"
   git pull --recurse-submodules
+}
+# 取り込めたか確認（権限が無い等で失敗した場合のフォロー）
+if (-not (Test-Path "$HOME\daimaru-skills\.git")) {
+  Write-Host "  ! 道具箱を取り込めませんでした。多くは『閲覧権限が無い』ことが原因です。" -ForegroundColor Red
+  Write-Host "    管理者に daimaru-d への read 権限付与を依頼してください。" -ForegroundColor Red
+  return
 }
 Set-Location "$HOME\daimaru-skills"
 
