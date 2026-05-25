@@ -5,10 +5,31 @@
 # ============================================================
 $ErrorActionPreference = "Stop"
 
+# --- 実行ポリシー対策 ---
+# Windows では npm / claude の実体が .ps1（PowerShellスクリプト）のため、
+# 「スクリプトの実行が無効」だと npm.ps1 が読めずに失敗する。
+# (1) 可能なら本人スコープを RemoteSigned にして今後も .ps1 を使えるようにする（管理者不要）
+# (2) 組織ポリシーで変更できない場合に備え、このスクリプト内では .cmd 版を直接呼ぶ
+$script:PolicyOk = $true
+try {
+  Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
+} catch {
+  $script:PolicyOk = $false
+  Write-Host "  （実行ポリシーは組織設定のため変更できませんでした。.cmd 経由で続行します）" -ForegroundColor DarkYellow
+}
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
+
 # winget でソフトを入れた直後は PATH が未反映になるため、都度読み直す
 function Refresh-Path {
   $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
               [Environment]::GetEnvironmentVariable("Path","User")
+}
+# .ps1 を避けて .cmd / .exe の実体を探して呼ぶ（実行ポリシーに左右されない）
+function Invoke-Cli {
+  param([string]$Name, [string[]]$CliArgs)
+  $cmd = (Get-Command "$Name.cmd","$Name.exe" -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if (-not $cmd) { $cmd = Get-Command $Name -ErrorAction Stop }
+  & $cmd.Source @CliArgs
 }
 
 Write-Host ""
@@ -20,7 +41,8 @@ Refresh-Path
 
 Write-Host ""
 Write-Host "==> 2/4 Claude Code を入れています" -ForegroundColor Cyan
-npm install -g @anthropic-ai/claude-code
+# npm.ps1 ではなく npm.cmd を直接呼ぶ（スクリプト実行が無効でも動く）
+Invoke-Cli npm @("install","-g","@anthropic-ai/claude-code")
 Refresh-Path
 
 Write-Host ""
@@ -44,5 +66,12 @@ Set-Location "$HOME\daimaru-skills"
 Write-Host ""
 Write-Host "==> 準備ができました。Claude Code を起動します" -ForegroundColor Green
 Write-Host "    起動後、最初に /setup と打つと全業務の中身がそろいます" -ForegroundColor Green
+if (-not $script:PolicyOk) {
+  Write-Host ""
+  Write-Host "  【次回以降の起動について】この PC は組織ポリシーでスクリプト実行が制限されています。" -ForegroundColor Yellow
+  Write-Host "  次回からは、フォルダ $HOME\daimaru-skills で  claude.cmd  と打って起動してください" -ForegroundColor Yellow
+  Write-Host "  （ふつうの『claude』が使えない場合の回避策です）" -ForegroundColor Yellow
+}
 Write-Host ""
-claude
+# claude.ps1 を避けて claude.cmd / claude.exe を起動
+Invoke-Cli claude @()

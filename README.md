@@ -27,6 +27,13 @@ irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 | i
 > 取り込みに失敗する場合、ほとんどは「対象リポジトリの閲覧権限が無い」だけです。
 > その場合は管理者に read 権限の付与を依頼してください。
 
+## うまくいかないとき
+
+- **「スクリプトの実行が無効になっている（running scripts is disabled / PSSecurityException）」**
+  → このスクリプトは `.cmd` 版を直接呼ぶよう対策済みです。**もう一度この1行を実行**してください。
+  すでに入ったソフトは自動でスキップされます。
+  なお組織ポリシーで制限された PC では、**次回からの起動は `claude` ではなく `claude.cmd`** と打ってください。
+
 ## 安全性について
 
 - このスクリプトは公開されており、中身（[setup.ps1](./setup.ps1)）は誰でも確認できます。
