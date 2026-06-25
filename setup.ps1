@@ -65,7 +65,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "==> 4/4 道具箱（daimaru-skills）を取り込んでいます" -ForegroundColor Cyan
+Write-Host "==> 4/5 道具箱（daimaru-skills）を取り込んでいます" -ForegroundColor Cyan
 Set-Location $HOME
 if (-not (Test-Path "$HOME\daimaru-skills")) {
   git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git
@@ -83,8 +83,35 @@ if (-not (Test-Path "$HOME\daimaru-skills\.git")) {
 Set-Location "$HOME\daimaru-skills"
 
 Write-Host ""
-Write-Host "==> 準備ができました。Claude Code を起動します" -ForegroundColor Green
-Write-Host "    起動後、最初に /setup と打つと全業務の中身がそろいます" -ForegroundColor Green
+Write-Host "==> 5/5 BIダッシュボード用の道具とログイン" -ForegroundColor Cyan
+# gcloud / clasp / cloud-sql-proxy
+if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
+  winget install --id Google.CloudSDK -e --accept-package-agreements --accept-source-agreements
+  Refresh-Path
+}
+Invoke-Cli npm @("install","-g","@google/clasp")
+if (Get-Command gcloud -ErrorAction SilentlyContinue) {
+  gcloud components install cloud-sql-proxy --quiet 2>$null   # 手動DL不要・自動でPATH
+}
+# DB接続ライブラリ(pg)
+if (Test-Path "$HOME\daimaru-skills\repos\eigyo-talk-analyzer") {
+  Push-Location "$HOME\daimaru-skills\repos\eigyo-talk-analyzer"
+  Invoke-Cli npm @("ci")
+  Pop-Location
+}
+# ログイン（ブラウザが開きます）
+if (Get-Command gcloud -ErrorAction SilentlyContinue) {
+  gcloud auth login 2>$null
+  gcloud auth application-default login 2>$null   # ★ADC（proxyが使う。無いと401）
+}
+if (Get-Command clasp -ErrorAction SilentlyContinue) {
+  if (-not (Test-Path "$HOME\.clasprc.json")) { clasp login 2>$null }
+}
+Write-Host "  ! 新規GAS作成には各自Googleで Apps Script API 有効化が必要: https://script.google.com/home/usersettings" -ForegroundColor Yellow
+
+Write-Host ""
+Write-Host "==> 準備ができました。Claude Code を起動します（安全バイパス：プロンプト最小・破壊操作はブロック）" -ForegroundColor Green
+Write-Host "    起動後の流れ: bash .claude/skills/bi-dashboard/harness/bi-doctor.sh （自己診断）→ /bi-coach" -ForegroundColor Green
 if (-not $script:PolicyOk) {
   Write-Host ""
   Write-Host "  【次回以降の起動について】この PC は組織ポリシーでスクリプト実行が制限されています。" -ForegroundColor Yellow
@@ -92,5 +119,5 @@ if (-not $script:PolicyOk) {
   Write-Host "  （ふつうの『claude』が使えない場合の回避策です）" -ForegroundColor Yellow
 }
 Write-Host ""
-# claude.ps1 を避けて claude.cmd / claude.exe を起動
-Invoke-Cli claude @()
+# claude.ps1 を避けて claude.cmd / claude.exe を起動（安全バイパス＝acceptEdits）
+Invoke-Cli claude @("--permission-mode","acceptEdits")
