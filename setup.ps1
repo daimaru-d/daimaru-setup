@@ -63,6 +63,14 @@ if ($LASTEXITCODE -ne 0) {
   Write-Host "  ! GitHub にログインできていません。もう一度この1行を実行してログインしてください。" -ForegroundColor Red
   return
 }
+# ★最頻エラー対策: 「daimaru-d を見られるアカウントか」を確認（別アカウントだと取り込みが Repository not found）
+gh api repos/daimaru-d/daimaru-skills 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "  ! ログイン中のアカウントは daimaru-d を見られません（取り込みが失敗します）。" -ForegroundColor Red
+  Write-Host "    別アカウントがある人: gh auth switch で切替 → もう一度この1行を実行。" -ForegroundColor Yellow
+  Write-Host "    権限が無い人: 管理者(篠田/神谷)へ daimaru-d の read 権限付与を依頼してください。" -ForegroundColor Yellow
+  return
+}
 
 Write-Host ""
 Write-Host "==> 4/5 道具箱（daimaru-skills）を取り込んでいます" -ForegroundColor Cyan
