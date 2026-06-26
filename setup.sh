@@ -69,14 +69,29 @@ have clasp || npm install -g @google/clasp >/dev/null 2>&1 || TODO+=("clasp を�
 if have gcloud; then
   have cloud-sql-proxy || gcloud components install cloud-sql-proxy --quiet >/dev/null 2>&1 || TODO+=("cloud-sql-proxy を導入: gcloud components install cloud-sql-proxy")
 fi
+hash -r 2>/dev/null || true   # 直前に入れたコマンドを今のシェルで見えるようにする
 for t in git node gh gcloud clasp cloud-sql-proxy; do have "$t" && ok "$t" || warn "$t 未導入(後で要対応)"; done
+# Node は 18 以上が必要（apt の nodejs は古いことがある）
+if have node; then
+  NJ="$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+  if [ -n "$NJ" ] && [ "$NJ" -ge 18 ] 2>/dev/null; then ok "Node.js $(node -v)"; else
+    warn "Node.js が古い($(node -v 2>/dev/null))。18+ が必要"; TODO+=("Node 18+ を導入（NodeSource: https://github.com/nodesource/distributions / brew install node）"); fi
+fi
 
 # --- 3/6 GitHub ログイン ---
 say "==> 3/6 GitHub にログイン（ブラウザが開いたら、許可されたアカウントで）"
 if have gh; then
   gh auth status >/dev/null 2>&1 || gh auth login --hostname github.com --git-protocol https --web
   gh auth setup-git >/dev/null 2>&1 || true
-  gh auth status >/dev/null 2>&1 && ok "GitHub ログイン済み" || TODO+=("gh auth login を実行（daimaru-d への read 権限も要確認）")
+  # ★最頻エラー対策: ログインだけでなく「daimaru-d を見られるアカウントか」を確認（別アカウントだと取り込みが Repository not found）
+  if gh api repos/daimaru-d/daimaru-skills >/dev/null 2>&1; then
+    ok "GitHub: daimaru-d にアクセス可（$(gh api user --jq .login 2>/dev/null)）"
+  else
+    err "GitHub ログイン中だが daimaru-d を見られません（このアカウントに閲覧権限なし＝取り込みが失敗します）"
+    warn "別アカウントを持っている人: gh auth switch で切替 → もう一度この1行を実行"
+    warn "権限が無い人: 管理者(篠田/神谷)へ daimaru-d の read 権限付与を依頼"
+    TODO+=("GitHubを daimaru-d を見られるアカウントに（gh auth switch / login）")
+  fi
 fi
 
 # --- 4/6 道具箱を取り込む ---
