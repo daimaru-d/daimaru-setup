@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>納付書QR読取（大丸開発グループ・試作）</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --blue: #1a5fb4;
+    --blue-dark: #103a70;
+    --gray: #f2f2f2;
+    --border: #ccc;
+    --danger: #b41a1a;
+    --ok: #1a7a1a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    background: #fff;
+    color: #222;
+    padding-bottom: 40px;
+  }
+  header {
+    background: var(--blue);
+    color: #fff;
+    padding: 16px;
+    text-align: center;
+  }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 4px 0 0; font-size: 12px; opacity: 0.85; }
+  main { padding: 16px; max-width: 480px; margin: 0 auto; }
+  section { display: none; }
+  section.active { display: block; }
+
+  .banner { padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; line-height: 1.6; background: #eaf1fb; color: var(--blue-dark); }
+
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tab-btn {
+    flex: 1; padding: 14px 8px; font-size: 15px; border: 2px solid var(--blue);
+    background: #fff; color: var(--blue); border-radius: 8px; font-weight: bold;
+  }
+  .tab-btn.selected { background: var(--blue); color: #fff; }
+
+  .big-btn {
+    display: block; width: 100%; padding: 18px; font-size: 18px; font-weight: bold;
+    border: none; border-radius: 10px; background: var(--blue); color: #fff;
+    margin-top: 12px; cursor: pointer;
+  }
+  .big-btn:disabled { background: #999; }
+  .big-btn.secondary { background: #fff; color: var(--blue); border: 2px solid var(--blue); }
+  .big-btn.danger { background: var(--danger); }
+
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 13px; color: #555; margin-bottom: 4px; }
+  .field input, .field select, .field textarea {
+    width: 100%; padding: 12px; font-size: 16px; border: 1px solid var(--border);
+    border-radius: 6px; background: #fff;
+  }
+  .field textarea { resize: vertical; min-height: 60px; }
+
+  .summary-card {
+    background: var(--gray); border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  }
+  .summary-card .amount { font-size: 28px; font-weight: bold; color: var(--blue-dark); }
+  .summary-card .row { display: flex; justify-content: space-between; font-size: 14px; margin-top: 6px; }
+  .summary-card .row span:first-child { color: #666; }
+
+  .msg { padding: 12px; border-radius: 8px; margin: 12px 0; font-size: 14px; }
+  .msg.error { background: #fbe4e4; color: var(--danger); }
+  .msg.ok { background: #e4f4e4; color: var(--ok); }
+  .msg.info { background: #eaf1fb; color: var(--blue-dark); }
+  .msg textarea { width: 100%; margin-top: 8px; font-size: 13px; }
+
+  #canvas { display: none; }
+  .preview { width: 100%; border-radius: 8px; margin-top: 8px; display: none; }
+
+  .note { font-size: 12px; color: #888; margin-top: 24px; line-height: 1.6; }
+  .settings-link { display: block; text-align: center; font-size: 12px; color: #999; margin-top: 20px; text-decoration: underline; background: none; border: none; padding: 8px; width: 100%; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>納付書QR読取（試作）</h1>
+  <p>読み取った内容をコピー・メール送信するための単体ページです。</p>
+</header>
+
+<main>
+
+  <div class="banner">
+    このページは読み取るだけです。納付の実行は行いません。読み取った内容はこの端末の外に自動送信されません。
+  </div>
+
+  <!-- 入力方法の切り替え -->
+  <div class="tabs">
+    <button type="button" class="tab-btn selected" id="tabPhoto">📷 写真から読み取る</button>
+    <button type="button" class="tab-btn" id="tabManual">✍️ 手入力する</button>
+  </div>
+
+  <!-- 撮影モード -->
+  <section id="sectionPhoto" class="active">
+    <div class="field">
+      <label for="photoInput">納付書のQR（eL-QR）が写るように撮影してください</label>
+      <input type="file" id="photoInput" accept="image/*" capture="environment">
+    </div>
+    <img id="preview" class="preview" alt="撮影プレビュー">
+    <canvas id="canvas"></canvas>
+    <div id="photoMsg"></div>
+  </section>
+
+  <!-- 手入力モード -->
+  <section id="sectionManual">
+    <div class="msg info">
+      カメラでうまく読み取れない場合は、納付書に印字されたeL番号（左下の34桁）や
+      各項目をそのまま手入力してください。
+    </div>
+    <div class="field">
+      <label for="manualElNumber">eL番号（34桁・任意）</label>
+      <input type="text" id="manualElNumber" inputmode="numeric" placeholder="収納機関番号+納付番号+確認番号+納付区分">
+    </div>
+    <button type="button" class="big-btn secondary" id="manualNextBtn">この内容で入力する</button>
+  </section>
+
+  <!-- 確認・操作画面（撮影/手入力どちらからも遷移） -->
+  <section id="sectionConfirm">
+    <div class="summary-card" id="summaryCard" style="display:none;">
+      <div class="amount" id="summaryAmount">-</div>
+      <div class="row"><span>納付先</span><span id="summaryLg">-</span></div>
+      <div class="row"><span>税目</span><span id="summaryTax">-</span></div>
+      <div class="row"><span>期別</span><span id="summaryTerm">-</span></div>
+      <div class="row"><span>納期限</span><span id="summaryDue">-</span></div>
+      <div class="row"><span>支払期限</span><span id="summaryPayBy">-</span></div>
+    </div>
+
+    <div class="field">
+      <label for="company">会社</label>
+      <select id="company">
+        <option>大丸開発</option>
+        <option>DAIMARU Enterprise</option>
+        <option>関観光ホテル</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="taxName">税目</label>
+      <input type="text" id="taxName">
+    </div>
+    <div class="field">
+      <label for="lgName">納付先（団体名）</label>
+      <input type="text" id="lgName">
+    </div>
+    <div class="field">
+      <label for="fiscalYear">課税年度</label>
+      <input type="text" id="fiscalYear" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label for="term">期別</label>
+      <input type="text" id="term" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label for="amountYen">金額（円）</label>
+      <input type="number" id="amountYen" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label for="dueDate">納期限</label>
+      <input type="date" id="dueDate">
+    </div>
+    <div class="field">
+      <label for="payBy">支払期限</label>
+      <input type="date" id="payBy">
+    </div>
+    <div class="field">
+      <label for="payMethod">納付方法</label>
+      <select id="payMethod">
+        <option>eLTAX</option>
+        <option>窓口</option>
+        <option>スマホ決済</option>
+        <option>口座振替</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="elNumber">eL番号（34桁）</label>
+      <input type="text" id="elNumber" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label for="memo">メモ</label>
+      <textarea id="memo" placeholder="任意"></textarea>
+    </div>
+
+    <button type="button" class="big-btn" id="copyRowBtn">📋 台帳の1行をコピー</button>
+    <button type="button" class="big-btn secondary" id="mailBtn">✉️ メールで送る</button>
+    <button type="button" class="big-btn secondary" id="apiSendBtn" style="display:none;">📤 台帳アプリへ送る</button>
+    <button type="button" class="big-btn secondary" id="backBtn">やり直す</button>
+    <div id="confirmMsg"></div>
+  </section>
+
+  <p class="note">
+    撮影・解読・台帳行の生成はすべてこの端末（ブラウザ）内で行われます。サーバーへの保存機能はなく、
+    「メールで送る」「台帳アプリへ送る」を明示的に押した場合のみ、その内容が送信されます。
+    eLTAX・金融機関へのログインや納付の実行は行いません。
+  </p>
+  <button type="button" class="settings-link" id="apiSettingLink">台帳アプリURLを設定</button>
+</main>
+
+<script>
+/* ===== eL-QR パーサ（nofu/elqr/elqr.js と同一ロジックのインライン版） ===== */
+var TAX_CODES = {
+  "151": "固定資産税・都市計画税",
+  "127": "自動車税種別割",
+};
+var ELTAX_KIKAN_ID = "13800";
+
+function isDigits(s) {
+  return typeof s === "string" && s.length > 0 && /^[0-9]+$/.test(s);
+}
+function isoDate(yyyymmdd) {
+  if (!yyyymmdd || yyyymmdd.length !== 8 || !isDigits(yyyymmdd)) return null;
+  return yyyymmdd.slice(0, 4) + "-" + yyyymmdd.slice(4, 6) + "-" + yyyymmdd.slice(6, 8);
+}
+function emptyResult(raw) {
+  return {
+    amount_yen: null, tax_code: null, tax_name: null, case_key: null, confirm_no: null,
+    lg_code: null, lg_name: null, office_code: null, fiscal_year: null, target_year: null,
+    term: null, due_date: null, pay_by: null, el_number: null, is_elqr: false,
+    raw: raw, warnings: [],
+  };
+}
+function parseElqr(text) {
+  var raw = (text || "").toString().trim();
+  var result = emptyResult(raw);
+  var warnings = result.warnings;
+  var digits = raw;
+  if (!isDigits(digits)) {
+    warnings.push("数字のみの文字列ではありません。eL-QR以外のQRコードの可能性があります");
+    return result;
+  }
+  var pos = 0, n = digits.length;
+  var tag27Val = null, tag54Val = null, tag62Val = null;
+  while (pos + 4 <= n) {
+    var tag = digits.slice(pos, pos + 2);
+    var lenStr = digits.slice(pos + 2, pos + 4);
+    if (!isDigits(lenStr)) { warnings.push("末尾に処理できないデータが残っています: " + digits.slice(pos)); break; }
+    var length = parseInt(lenStr, 10);
+    var valStart = pos + 4, valEnd = valStart + length, value;
+    if (valEnd > n) {
+      warnings.push("Tag " + tag + " の長さが不足しています（宣言 " + length + " 桁、実際 " + (n - valStart) + " 桁）");
+      value = digits.slice(valStart, n); pos = n;
+    } else {
+      value = digits.slice(valStart, valEnd); pos = valEnd;
+    }
+    if (tag === "27") tag27Val = value;
+    else if (tag === "54") tag54Val = value;
+    else if (tag === "62") tag62Val = value;
+  }
+  var leftover = digits.slice(pos);
+  if (leftover) warnings.push("末尾に処理できないデータが残っています: " + leftover);
+
+  var kikanId = null, caseKey = null, confirmNo = null, lgCode = null, officeCode = null, taxCode = null;
+  if (tag27Val === null) {
+    warnings.push("Tag27（JPQR加盟店情報）が見つかりません");
+  } else {
+    var subValues = {}, sp = 0, sn = tag27Val.length;
+    while (sp + 4 <= sn) {
+      var subId = tag27Val.slice(sp, sp + 2);
+      var subLenStr = tag27Val.slice(sp + 2, sp + 4);
+      if (!isDigits(subLenStr)) break;
+      var subLen = parseInt(subLenStr, 10);
+      var svStart = sp + 4, svEnd = svStart + subLen;
+      if (svEnd > sn) break;
+      subValues[subId] = tag27Val.slice(svStart, svEnd);
+      sp = svEnd;
+    }
+    kikanId = subValues["00"] || null;
+    var info83 = subValues["01"] || null;
+    if (kikanId === ELTAX_KIKAN_ID && info83 !== null && info83.length === 83) {
+      result.is_elqr = true;
+      var ip = 0;
+      var take = function (c) { var v = info83.slice(ip, ip + c); ip += c; return v; };
+      take(2); take(11); take(11); take(1); take(5); take(1);
+      taxCode = take(3); take(5); take(2);
+      caseKey = take(20); confirmNo = take(6); take(1);
+      lgCode = take(5); officeCode = take(3);
+    } else {
+      warnings.push("Tag27のSub情報がeL-QRの想定形式と一致しません（地方税共同機構=13800ではない）");
+    }
+  }
+  if (!result.is_elqr) warnings.push("eL-QRではない可能性があります（他形式のQRコードかもしれません）");
+  if (tag54Val !== null) {
+    var amount = parseInt(tag54Val, 10);
+    result.amount_yen = isNaN(amount) ? null : amount;
+  }
+  if (tag62Val !== null && tag62Val.length === 26) {
+    result.fiscal_year = tag62Val.slice(0, 4);
+    result.target_year = tag62Val.slice(4, 8);
+    result.term = tag62Val.slice(8, 10);
+    result.due_date = isoDate(tag62Val.slice(10, 18));
+    result.pay_by = isoDate(tag62Val.slice(18, 26));
+  } else if (tag62Val !== null) {
+    warnings.push("付加情報1(Tag62)の長さが規定の26桁と一致しません");
+  }
+  result.tax_code = taxCode;
+  if (taxCode) result.tax_name = TAX_CODES[taxCode] || (taxCode + "（未登録の納付区分）");
+  result.case_key = caseKey;
+  result.confirm_no = confirmNo;
+  result.lg_code = lgCode;
+  if (lgCode) result.lg_name = LG_CODES[lgCode] || ("未登録（" + lgCode + "）");
+  result.office_code = officeCode;
+  if (kikanId && caseKey && confirmNo && taxCode) {
+    result.el_number = kikanId + caseKey + confirmNo + taxCode;
+  }
+  return result;
+}
+
+/* 団体コード辞書（岐阜県中心、抜粋）。未登録は番号のまま表示。 */
+var LG_CODES = {
+  "21000": "岐阜県", "21201": "岐阜市", "21202": "大垣市", "21203": "高山市",
+  "21204": "多治見市", "21205": "関市", "21206": "中津川市", "21207": "美濃市",
+  "21208": "瑞浪市", "21209": "羽島市", "21210": "恵那市", "21211": "美濃加茂市",
+  "21212": "土岐市", "21213": "各務原市", "21214": "可児市", "21215": "山県市",
+  "21216": "瑞穂市", "21217": "飛騨市", "21218": "本巣市", "21219": "郡上市",
+  "21220": "下呂市", "21221": "海津市", "21302": "岐南町", "21303": "笠松町",
+  "21341": "養老町", "21361": "垂井町", "21362": "関ケ原町", "21381": "神戸町",
+  "21382": "輪之内町", "21383": "安八町", "21401": "揖斐川町", "21403": "大野町",
+  "21404": "池田町", "21421": "北方町", "21501": "坂祝町", "21502": "富加町",
+  "21503": "川辺町", "21504": "七宗町", "21505": "八百津町", "21506": "白川町",
+  "21507": "東白川村", "21521": "御嵩町", "21604": "白川村", "23000": "愛知県",
+  "23203": "一宮市", "13000": "東京都", "13110": "目黒区", "13113": "渋谷区", "13109": "品川区",
+};
+
+/* ===== 画面ロジック ===== */
+function $(id) { return document.getElementById(id); }
+function showSection(id) {
+  ["sectionPhoto", "sectionManual", "sectionConfirm"].forEach(function (s) {
+    $(s).classList.toggle("active", s === id);
+  });
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+function formatDateTime(d) {
+  return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) +
+    " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+}
+
+$("tabPhoto").addEventListener("click", function () {
+  $("tabPhoto").classList.add("selected");
+  $("tabManual").classList.remove("selected");
+  showSection("sectionPhoto");
+});
+$("tabManual").addEventListener("click", function () {
+  $("tabManual").classList.add("selected");
+  $("tabPhoto").classList.remove("selected");
+  showSection("sectionManual");
+});
+
+/* --- 撮影→QR解読 --- */
+$("photoInput").addEventListener("change", function (ev) {
+  var file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  $("photoMsg").innerHTML = '<div class="msg info">解読しています…</div>';
+
+  var img = new Image();
+  var reader = new FileReader();
+  reader.onload = function (e) {
+    img.onload = function () {
+      $("preview").src = e.target.result;
+      $("preview").style.display = "block";
+      decodeImage(img);
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+function decodeImage(img) {
+  var canvas = $("canvas");
+  var maxSide = 1600;
+  var scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+  var w = Math.round(img.width * scale);
+  var h = Math.round(img.height * scale);
+  canvas.width = w;
+  canvas.height = h;
+  var ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, w, h);
+
+  // 1段階目: そのまま解読
+  var code = tryDecode(ctx, w, h);
+
+  // 2段階目: さらに縮小して再試行（ピント/ノイズ対策）
+  if (!code) {
+    var w2 = Math.round(w * 0.6), h2 = Math.round(h * 0.6);
+    var ctx2 = getScaledContext(canvas, w2, h2);
+    code = tryDecode(ctx2, w2, h2);
+  }
+
+  // 3段階目: 色反転して再試行（印字の白黒が読み取り環境によって反転することがあるため）
+  if (!code) {
+    invertContext(ctx, w, h);
+    code = tryDecode(ctx, w, h);
+  }
+
+  if (code) {
+    onQrDecoded(code.data);
+  } else {
+    $("photoMsg").innerHTML =
+      '<div class="msg error">QRコードを読み取れませんでした。明るい場所で、QR部分が大きく' +
+      '写るように撮り直すか、「手入力する」から入力してください。</div>';
+  }
+}
+
+function getScaledContext(sourceCanvas, w, h) {
+  var c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  var ctx = c.getContext("2d");
+  ctx.drawImage(sourceCanvas, 0, 0, w, h);
+  return ctx;
+}
+
+function invertContext(ctx, w, h) {
+  var imgData = ctx.getImageData(0, 0, w, h);
+  var d = imgData.data;
+  for (var i = 0; i < d.length; i += 4) {
+    d[i] = 255 - d[i];
+    d[i + 1] = 255 - d[i + 1];
+    d[i + 2] = 255 - d[i + 2];
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+function tryDecode(ctx, w, h) {
+  var imageData = ctx.getImageData(0, 0, w, h);
+  return jsQR(imageData.data, imageData.width, imageData.height);
+}
+
+function onQrDecoded(text) {
+  var parsed = parseElqr(text);
+  if (!parsed.is_elqr) {
+    $("photoMsg").innerHTML =
+      '<div class="msg error">QRは読み取れましたが、eL-QRの形式と一致しませんでした。' +
+      '内容を確認のうえ、必要なら手入力してください。</div>';
+  }
+  fillConfirmForm(parsed);
+  showSection("sectionConfirm");
+}
+
+/* --- 手入力 --- */
+$("manualNextBtn").addEventListener("click", function () {
+  var manual = emptyResult("");
+  manual.el_number = $("manualElNumber").value.trim();
+  fillConfirmForm(manual);
+  showSection("sectionConfirm");
+});
+
+/* --- 確認フォーム --- */
+function fillConfirmForm(parsed) {
+  $("taxName").value = parsed.tax_name || "";
+  $("lgName").value = parsed.lg_name || "";
+  $("fiscalYear").value = parsed.fiscal_year || "";
+  $("term").value = parsed.term || "";
+  $("amountYen").value = parsed.amount_yen != null ? parsed.amount_yen : "";
+  $("dueDate").value = parsed.due_date || "";
+  $("payBy").value = parsed.pay_by || "";
+  $("elNumber").value = parsed.el_number || "";
+  $("elNumber").dataset.caseKey = parsed.case_key || "";
+  $("elNumber").dataset.confirmNo = parsed.confirm_no || "";
+  $("elNumber").dataset.raw = parsed.raw || "";
+
+  if (parsed.amount_yen != null) {
+    $("summaryCard").style.display = "block";
+    $("summaryAmount").textContent = "¥" + Number(parsed.amount_yen).toLocaleString();
+    $("summaryLg").textContent = parsed.lg_name || "-";
+    $("summaryTax").textContent = parsed.tax_name || "-";
+    $("summaryTerm").textContent = parsed.term ? parsed.term + "期" : "-";
+    $("summaryDue").textContent = parsed.due_date || "-";
+    $("summaryPayBy").textContent = parsed.pay_by || "-";
+  } else {
+    $("summaryCard").style.display = "none";
+  }
+  $("confirmMsg").innerHTML = "";
+}
+
+$("backBtn").addEventListener("click", function () {
+  showSection($("tabPhoto").classList.contains("selected") ? "sectionPhoto" : "sectionManual");
+});
+
+/* --- 台帳の1行（タブ区切り）を組み立てる。列順はCode.gsのHEADERS/appendEntryと一致させる。 --- */
+function buildLedgerRow() {
+  var cols = [
+    formatDateTime(new Date()),
+    $("company").value,
+    $("taxName").value,
+    $("lgName").value,
+    $("fiscalYear").value,
+    $("term").value,
+    $("amountYen").value,
+    $("dueDate").value,
+    $("payBy").value,
+    $("payMethod").value,
+    "未納付",
+    $("elNumber").value,
+    $("elNumber").dataset.caseKey || "",
+    $("elNumber").dataset.confirmNo || "",
+    $("elNumber").dataset.raw || "",
+    $("memo").value,
+  ];
+  return cols.join("\t");
+}
+
+function buildApiPayload() {
+  return {
+    company: $("company").value,
+    taxName: $("taxName").value,
+    lgName: $("lgName").value,
+    fiscalYear: $("fiscalYear").value,
+    term: $("term").value,
+    amountYen: $("amountYen").value ? Number($("amountYen").value) : "",
+    dueDate: $("dueDate").value,
+    payBy: $("payBy").value,
+    payMethod: $("payMethod").value,
+    elNumber: $("elNumber").value,
+    caseKey: $("elNumber").dataset.caseKey || "",
+    confirmNo: $("elNumber").dataset.confirmNo || "",
+    raw: $("elNumber").dataset.raw || "",
+    memo: $("memo").value,
+  };
+}
+
+/* --- 「台帳の1行をコピー」 --- */
+$("copyRowBtn").addEventListener("click", function () {
+  var row = buildLedgerRow();
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(row).then(function () {
+      $("confirmMsg").innerHTML = '<div class="msg ok">台帳の1行をコピーしました。スプレッドシートに貼り付けてください。</div>';
+    }, function () {
+      showCopyFallback(row);
+    });
+  } else {
+    showCopyFallback(row);
+  }
+});
+
+function showCopyFallback(row) {
+  var ok = false;
+  var ta = document.createElement("textarea");
+  ta.value = row;
+  ta.style.position = "fixed";
+  ta.style.top = "0";
+  ta.style.left = "0";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+
+  if (ok) {
+    $("confirmMsg").innerHTML = '<div class="msg ok">台帳の1行をコピーしました。スプレッドシートに貼り付けてください。</div>';
+  } else {
+    $("confirmMsg").innerHTML =
+      '<div class="msg info">自動コピーできませんでした。下のテキストを長押しして選択・コピーしてください。' +
+      '<textarea readonly rows="3">' + escapeHtml(row) + '</textarea></div>';
+  }
+}
+
+/* --- 「メールで送る」 --- */
+$("mailBtn").addEventListener("click", function () {
+  var subject = "納付書 登録: " + ($("lgName").value || "") + " " + ($("taxName").value || "") + " " + ($("dueDate").value || "");
+  var lines = [
+    "会社: " + $("company").value,
+    "税目: " + $("taxName").value,
+    "納付先(団体名): " + $("lgName").value,
+    "課税年度: " + $("fiscalYear").value,
+    "期別: " + $("term").value,
+    "金額(円): " + $("amountYen").value,
+    "納期限: " + $("dueDate").value,
+    "支払期限: " + $("payBy").value,
+    "納付方法: " + $("payMethod").value,
+    "状態: 未納付",
+    "eL番号: " + $("elNumber").value,
+    "案件特定キー: " + ($("elNumber").dataset.caseKey || ""),
+    "確認番号: " + ($("elNumber").dataset.confirmNo || ""),
+    "生データ: " + ($("elNumber").dataset.raw || ""),
+    "メモ: " + $("memo").value,
+    "",
+    "---台帳貼り付け用（タブ区切り1行）---",
+    buildLedgerRow(),
+  ];
+  var url = "mailto:?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(lines.join("\n"));
+  window.location.href = url;
+});
+
+/* --- 「台帳アプリへ送る」（?api=<GAS Web App URL> があるときだけ表示） --- */
+function getApiUrl() {
+  try { return localStorage.getItem("nofuQrApiUrl") || ""; } catch (e) { return ""; }
+}
+function setApiUrl(url) {
+  try {
+    if (url) { localStorage.setItem("nofuQrApiUrl", url); }
+    else { localStorage.removeItem("nofuQrApiUrl"); }
+  } catch (e) { /* localStorageが使えない環境では何もしない */ }
+}
+function refreshApiButtonVisibility() {
+  $("apiSendBtn").style.display = getApiUrl() ? "block" : "none";
+}
+function initApiSetting() {
+  var params = new URLSearchParams(window.location.search);
+  var queryApi = params.get("api");
+  if (queryApi) { setApiUrl(queryApi); }
+  refreshApiButtonVisibility();
+}
+
+$("apiSendBtn").addEventListener("click", function () {
+  var api = getApiUrl();
+  if (!api) { return; }
+  $("apiSendBtn").disabled = true;
+  $("confirmMsg").innerHTML = '<div class="msg info">送信しています…</div>';
+  fetch(api, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify(buildApiPayload()),
+  }).then(function () {
+    $("apiSendBtn").disabled = false;
+    $("confirmMsg").innerHTML = '<div class="msg ok">送信しました（台帳で確認してください）。</div>';
+  }).catch(function (err) {
+    $("apiSendBtn").disabled = false;
+    $("confirmMsg").innerHTML = '<div class="msg error">送信に失敗しました: ' + escapeHtml(String(err)) + '</div>';
+  });
+});
+
+$("apiSettingLink").addEventListener("click", function () {
+  var current = getApiUrl();
+  var next = window.prompt("台帳アプリ（GAS Web AppのURL）を入力してください。空欄で解除します。", current);
+  if (next === null) return;
+  next = next.trim();
+  setApiUrl(next);
+  refreshApiButtonVisibility();
+});
+
+initApiSetting();
+</script>
+</body>
+</html>
