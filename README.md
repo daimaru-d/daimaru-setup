@@ -44,3 +44,18 @@
 - このスクリプトは公開されており、中身（[setup.sh](./setup.sh) / [setup.ps1](./setup.ps1)）は誰でも確認できます。
 - パスワードやトークンは一切含みません。ログインは公式のブラウザ認証のみを使います。
 - 起動する Claude Code は **安全バイパス**設定（`daimaru-skills/.claude/settings.json` の allow/deny）。定型コマンドは聞かれず、`rm -rf`・`git push`・`.env`編集 などの破壊的操作はブロックされます。
+
+## 総務経理部門向け（納付期限の見張り・返済期日アラート）
+
+総務経理の自動化リポジトリ `daimaru-keiri-automation` を導入する場合は、上の1行ではなく**こちら**を貼ってください
+（Claude Code / Git / GitHub CLI / Node / Python / VS Code(日本語化) と Playwright を入れ、リポジトリを取り込んで VS Code で開きます）。
+
+| OS | 開くもの | 貼る1行 |
+|:--|:--|:--|
+| **Windows** | Windows PowerShell | `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/keiri/onboard.ps1 \| iex` |
+| **macOS** | ターミナル | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/keiri/onboard.sh \| bash` |
+
+- 途中でブラウザが2回開きます（GitHub と Claude のログイン）。それ以外はほぼ待ち時間です（15〜25分）。
+- `daimaru-keiri-automation` は非公開リポジトリです。取り込みに失敗する場合は GitHub のユーザー名を GScale までお知らせください（招待します）。
+- つまずいたら `%USERPROFILE%\gscale-onboard.log`（Mac は `~/gscale-onboard.log`）を送ってください。
+- `scripts/keiri/` のファイルは GScale-jp/fde-setup から自動生成されています。直接編集しないでください。
