@@ -32,23 +32,23 @@ else                                    TTY_IN=/dev/null;  STDIN_WAS_TTY=0
 fi
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@b74f5a8) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@a6917d8) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 : "${PROFILE_ID:=daimaru-keiri}"
 : "${PROFILE_NAME:=大丸開発グループ 総務経理 自動化}"
 : "${PROJECT_REPO:=https://github.com/daimaru-d/daimaru-keiri-automation.git}"
 : "${PROJECT_DIR:=$HOME/daimaru-keiri-automation}"
-: "${PROJECT_SETUP_CMD:=npm install playwright && npx --yes playwright install chromium && (python -m pip install --user openpyxl || python3 -m pip install --user openpyxl)}"
+: "${PROJECT_SETUP_CMD:=python scripts/keiri.py bootstrap || (npm install playwright && npx --yes playwright install chromium)}"
 : "${TOOLSET:=lite}"
 : "${EXTRA_TOOLS:=python playwright}"
 : "${ENV_TEMPLATE:=.env}"
-: "${ENV_TEMPLATE_KEYS:=NOFU_API_URL NOFU_API_TOKEN DRY_RUN=1}"
+: "${ENV_TEMPLATE_KEYS:=NOFU_API_URL NOFU_API_TOKEN DRY_RUN=1 ETAX_USER_ID ETAX_PASSWORD ELTAX_USER_ID ELTAX_PASSWORD}"
 : "${VSCODE_EXTENSIONS:=anthropic.claude-code MS-CEINTL.vscode-language-pack-ja}"
 : "${WELCOME_DOC:=README.md}"
 : "${ASSET_BASE_URL:=https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/keiri}"
 : "${EXTRA_NPM_GLOBALS:=}"
-: "${NEXT_HINT:=    cd ~/daimaru-keiri-automation してから claude と打つと、AI と一緒に作業を始められます}"
+: "${NEXT_HINT:=    VS Code で Claude Code を開き「/menu」と入力すると、できることの一覧が出ます（困ったら「点検して」）}"
 # <<< PROFILE <<<
 
 # ---- パイプ実行（curl | bash）でも対話できるようにする -----------------------

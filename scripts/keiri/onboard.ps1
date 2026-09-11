@@ -22,23 +22,23 @@ param(
 $ErrorActionPreference = "Continue"
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@b74f5a8) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@a6917d8) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
 $PROFILE_NAME = if ($env:PROFILE_NAME) { $env:PROFILE_NAME } else { "大丸開発グループ 総務経理 自動化" }
 $PROJECT_REPO = if ($env:PROJECT_REPO) { $env:PROJECT_REPO } else { "https://github.com/daimaru-d/daimaru-keiri-automation.git" }
 $PROJECT_DIR = if ($env:PROJECT_DIR) { $env:PROJECT_DIR } else { "$HOME/daimaru-keiri-automation" }
-$PROJECT_SETUP_CMD = if ($env:PROJECT_SETUP_CMD) { $env:PROJECT_SETUP_CMD } else { "npm install playwright && npx --yes playwright install chromium && (python -m pip install --user openpyxl || python3 -m pip install --user openpyxl)" }
+$PROJECT_SETUP_CMD = if ($env:PROJECT_SETUP_CMD) { $env:PROJECT_SETUP_CMD } else { "python scripts/keiri.py bootstrap || (npm install playwright && npx --yes playwright install chromium)" }
 $TOOLSET = if ($env:TOOLSET) { $env:TOOLSET } else { "lite" }
 $EXTRA_TOOLS = if ($env:EXTRA_TOOLS) { $env:EXTRA_TOOLS } else { "python playwright" }
 $ENV_TEMPLATE = if ($env:ENV_TEMPLATE) { $env:ENV_TEMPLATE } else { ".env" }
-$ENV_TEMPLATE_KEYS = if ($env:ENV_TEMPLATE_KEYS) { $env:ENV_TEMPLATE_KEYS } else { "NOFU_API_URL NOFU_API_TOKEN DRY_RUN=1" }
+$ENV_TEMPLATE_KEYS = if ($env:ENV_TEMPLATE_KEYS) { $env:ENV_TEMPLATE_KEYS } else { "NOFU_API_URL NOFU_API_TOKEN DRY_RUN=1 ETAX_USER_ID ETAX_PASSWORD ELTAX_USER_ID ELTAX_PASSWORD" }
 $VSCODE_EXTENSIONS = if ($env:VSCODE_EXTENSIONS) { $env:VSCODE_EXTENSIONS } else { "anthropic.claude-code MS-CEINTL.vscode-language-pack-ja" }
 $WELCOME_DOC = if ($env:WELCOME_DOC) { $env:WELCOME_DOC } else { "README.md" }
 $ASSET_BASE_URL = if ($env:ASSET_BASE_URL) { $env:ASSET_BASE_URL } else { "https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/keiri" }
 $EXTRA_NPM_GLOBALS = if ($env:EXTRA_NPM_GLOBALS) { $env:EXTRA_NPM_GLOBALS } else { "" }
-$NEXT_HINT = if ($env:NEXT_HINT) { $env:NEXT_HINT } else { "    cd ~/daimaru-keiri-automation してから claude と打つと、AI と一緒に作業を始められます" }
+$NEXT_HINT = if ($env:NEXT_HINT) { $env:NEXT_HINT } else { "    VS Code で Claude Code を開き「/menu」と入力すると、できることの一覧が出ます（困ったら「点検して」）" }
 # <<< PROFILE <<<
 
 $TOTAL = 7
