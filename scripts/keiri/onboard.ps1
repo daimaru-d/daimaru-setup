@@ -19,17 +19,20 @@
 #   未完了にはしない）/ それ以外=失敗（未完了に数える）
 #   2 はインタプリタの「ファイルが無い」とも重なるため、前提ファイルを PROJECT_SETUP_REQUIRES で宣言する
 # =============================================================================
+# irm | iex では param の変数が控えを取る前に呼び出し元のスコープへ作られる。$Check のような一般的な名前だと
+# 利用者の同名変数を壊すため、変数名は衝突しにくくし、-Check 等の指定は別名で受ける
 param(
-  [switch]$Check,
-  [switch]$SkipVSCode,
-  [switch]$SkipProject
+  [Alias('Check')][switch]$GsoCheck,
+  [Alias('SkipVSCode')][switch]$GsoSkipVSCode,
+  [Alias('SkipProject')][switch]$GsoSkipProject
 )
 
 # irm | iex では呼び出し元のスコープで動く。ここから作る・上書きする変数を、返す前に元へ戻すための控え
-# 控えの入れ物は呼び出し元と衝突しない名前にし、控え自身は「元からあった変数」から外す（外さないと戻す処理が消さずに残す）
+# 控えの入れ物は呼び出し元と衝突しない名前にし、控え自身と param の変数は「元からあった変数」から外す
+# （外さないと戻す処理が消さずに残す）
 $script:__GScaleOnboardSnapshot = @{}
 foreach ($__v in @(Get-Variable)) { $script:__GScaleOnboardSnapshot[$__v.Name] = $__v.Value }
-[void]$script:__GScaleOnboardSnapshot.Remove('__GScaleOnboardSnapshot')
+foreach ($__v in @('__GScaleOnboardSnapshot', 'GsoCheck', 'GsoSkipVSCode', 'GsoSkipProject')) { [void]$script:__GScaleOnboardSnapshot.Remove($__v) }
 
 # irm | iex では呼び出し元の PowerShell のスコープで動くため、変えた設定は戻ってから返す
 $script:PrevErrorActionPreference = $ErrorActionPreference
@@ -38,7 +41,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@80d1fd1) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@50f5542) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -68,7 +71,7 @@ $script:ViaIex = -not ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPat
 # 永久に止まらないよう対話部分を飛ばす
 $script:Interactive = [Environment]::UserInteractive -and -not ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' })
 $LogFile = Join-Path $env:USERPROFILE "gscale-onboard.log"
-if (-not $Check) { "" | Out-File -FilePath $LogFile -Encoding utf8 }
+if (-not $GsoCheck) { "" | Out-File -FilePath $LogFile -Encoding utf8 }
 
 # irm | iex では下の関数が利用者の PowerShell に定義される。利用者が同名の関数（Log/OK 等）を持っていたら
 # 上書き前の定義を控えておき、返す前に戻す（消しっぱなし・上書きしっぱなしにしない）
@@ -79,7 +82,7 @@ foreach ($fn in $script:OnboardFunctionNames) {
   if ($prev) { $script:SavedFunctions[$fn] = $prev.ScriptBlock }
 }
 
-function Log($m)  { Write-Host $m; if (-not $Check) { $m | Out-File -FilePath $LogFile -Append -Encoding utf8 } }
+function Log($m)  { Write-Host $m; if (-not $GsoCheck) { $m | Out-File -FilePath $LogFile -Append -Encoding utf8 } }
 function Step($n,$t) { Log ""; Log ("[{0}/{1}] {2}" -f $n,$TOTAL,$t) }
 function OK($m)   { Log ("  OK  " + $m) }
 function NG($m)   { Log ("  --  " + $m) }
@@ -135,7 +138,7 @@ Log ("  " + $PROFILE_NAME + " - かんたんセットアップ")
 Log ("=" * 60)
 Log "  途中でブラウザが2回開きます（GitHub と Claude のログイン）。"
 Log "  合計10〜20分ほど。ほとんどは待ち時間です。"
-if ($Check) { Log "  [診断モード] 何も変更しません" }
+if ($GsoCheck) { Log "  [診断モード] 何も変更しません" }
 
 # =============================================================================
 Step 1 "パソコンの状態を確認しています"
@@ -166,7 +169,7 @@ if (-not $installer -and $ASSET_BASE_URL) {
 
 if (-not $installer) {
   Fail "installer" "インストーラ(install_all.ps1)が見つかりません"
-} elseif ($Check) {
+} elseif ($GsoCheck) {
   & powershell -NoProfile -ExecutionPolicy Bypass -File $installer -CheckOnly
 } else {
   # $args は PowerShell の自動変数なので使わない（上書きすると splat が壊れる）
@@ -183,7 +186,7 @@ if (-not $installer) {
       "vc-runtime" { $env:WITH_VCRUNTIME  = "1" }
     }
   }
-  if ($SkipVSCode)         { $instArgs += "-SkipVSCode"; $env:WITH_VSCODE = "0" }
+  if ($GsoSkipVSCode)         { $instArgs += "-SkipVSCode"; $env:WITH_VSCODE = "0" }
   if ($PROJECT_DIR)        { $instArgs += @("-TrustDir", $PROJECT_DIR) }
   & powershell -NoProfile -ExecutionPolicy Bypass -File $installer @instArgs
   $instRc = $LASTEXITCODE
@@ -217,7 +220,7 @@ if (($EXTRA_TOOLS -split '\s+') -contains "vc-runtime") {
 }
 
 # プロファイル指定の追加CLI（例: Gemini CLI / Codex CLI）
-if ($EXTRA_NPM_GLOBALS -and -not $Check -and (Have "npm")) {
+if ($EXTRA_NPM_GLOBALS -and -not $GsoCheck -and (Have "npm")) {
   foreach ($pkg in ($EXTRA_NPM_GLOBALS -split '\s+')) {
     if (-not $pkg) { continue }
     cmd /c "npm install -g $pkg" 2>$null | Out-Null
@@ -234,7 +237,7 @@ if (-not (Have "gh")) {
 } else {
   gh auth status 2>$null | Out-Null
   if ($LASTEXITCODE -eq 0) { $ghAuthed = $true; OK ("ログイン済み（" + (gh api user --jq .login 2>$null) + "）") }
-  elseif ($Check) { NG "未ログイン" }
+  elseif ($GsoCheck) { NG "未ログイン" }
   elseif (-not $script:Interactive) { Fail "gh-auth" "GitHub 未ログイン（対話できない環境のためログインを飛ばしました）" }
   else {
     # アカウントの有無をここで確認する（無い人を「作成」まで連れて行く）
@@ -262,7 +265,7 @@ if (-not (Have "gh")) {
   }
 }
 
-if ($ghAuthed -and -not $Check) {
+if ($ghAuthed -and -not $GsoCheck) {
   gh auth setup-git 2>$null | Out-Null
   if ($LASTEXITCODE -eq 0) { OK "git が GitHub を使えるようになりました" }
   else { Warn "git と GitHub の連携設定に失敗しました（取り込みで失敗する場合はログを送ってください）" }
@@ -319,7 +322,7 @@ if ($PROJECT_REPO -and (Have "gh") -and $ghAuthed) {
 # =============================================================================
 Step 4 "VS Code を使えるようにしています"
 # =============================================================================
-if ($SkipVSCode) {
+if ($GsoSkipVSCode) {
   NG "スキップ指定"
 } else {
   if (-not (Have "code")) {
@@ -333,7 +336,7 @@ if ($SkipVSCode) {
   }
   if (Have "code") {
     OK ("VS Code (" + ((code --version 2>$null) | Select-Object -First 1) + ")")
-    if (-not $Check) {
+    if (-not $GsoCheck) {
       $installed = (code --list-extensions 2>$null)
       foreach ($ext in ($VSCODE_EXTENSIONS -split '\s+')) {
         if (-not $ext) { continue }
@@ -351,9 +354,9 @@ if ($SkipVSCode) {
 # =============================================================================
 Step 5 "プロジェクトを取り込んでいます"
 # =============================================================================
-if (-not $PROJECT_REPO -or $SkipProject) {
+if (-not $PROJECT_REPO -or $GsoSkipProject) {
   NG "対象なし（スキップ）"
-} elseif ($Check) {
+} elseif ($GsoCheck) {
   if (Test-Path (Join-Path $PROJECT_DIR ".git")) { OK $PROJECT_DIR } else { NG ($PROJECT_DIR + " が未取得") }
 } elseif (-not (Have "git")) {
   Fail "project" "git が無いため取り込めません"
@@ -452,7 +455,7 @@ if (-not (Have "claude")) {
   Fail "claude" "claude が見つかりません"
 } elseif (Test-Path $claudeCred) {
   OK "ログイン済み"
-} elseif (-not $Check -and -not $script:Interactive) {
+} elseif (-not $GsoCheck -and -not $script:Interactive) {
   # 対話できない環境ではこの後のログインを行わないため、集計（Step 7）より前に未完了として数える
   Fail "claude-login" "Claude 未ログイン（対話できない環境のためログインを飛ばしました）"
 } else {
@@ -473,7 +476,7 @@ if ($script:Failed.Count -gt 0) {
   $result = "PARTIAL"; $rc = 2
 } else { $result = "PASS"; $rc = 0 }
 
-if ($Check) {
+if ($GsoCheck) {
   Log ""
   Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
   $global:LASTEXITCODE = $rc
@@ -487,7 +490,7 @@ Log ("=" * 60)
 if ($result -eq "PASS") { Log "  準備できました！" } else { Log "  あと少しです" }
 Log ("=" * 60)
 
-if ($script:Interactive -and -not $SkipVSCode -and (Have "code") -and $PROJECT_DIR -and (Test-Path $PROJECT_DIR)) {
+if ($script:Interactive -and -not $GsoSkipVSCode -and (Have "code") -and $PROJECT_DIR -and (Test-Path $PROJECT_DIR)) {
   $welcome = if ($WELCOME_DOC) { Join-Path $PROJECT_DIR $WELCOME_DOC } else { "" }
   if ($welcome -and (Test-Path $welcome)) { code $PROJECT_DIR $welcome } else { code $PROJECT_DIR }
   Log "  VS Code を開きました。"
