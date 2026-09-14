@@ -42,7 +42,7 @@ fi
 : "${PROJECT_SETUP_CMD:=python scripts/keiri.py bootstrap}"
 : "${PROJECT_SETUP_REQUIRES:=scripts/keiri.py}"
 : "${TOOLSET:=lite}"
-: "${EXTRA_TOOLS:=python playwright}"
+: "${EXTRA_TOOLS:=python playwright vc-runtime}"
 : "${ENV_TEMPLATE:=.env}"
 : "${ENV_TEMPLATE_KEYS:=NOFU_API_URL NOFU_API_TOKEN DRY_RUN=1 ETAX_USER_ID ETAX_PASSWORD ELTAX_USER_ID ELTAX_PASSWORD}"
 : "${VSCODE_EXTENSIONS:=anthropic.claude-code MS-CEINTL.vscode-language-pack-ja}"

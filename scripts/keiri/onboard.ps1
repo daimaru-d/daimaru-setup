@@ -42,7 +42,7 @@ $PROJECT_DIR = if ($env:PROJECT_DIR) { $env:PROJECT_DIR } else { "$HOME/daimaru-
 $PROJECT_SETUP_CMD = if ($env:PROJECT_SETUP_CMD) { $env:PROJECT_SETUP_CMD } else { "python scripts/keiri.py bootstrap" }
 $PROJECT_SETUP_REQUIRES = if ($env:PROJECT_SETUP_REQUIRES) { $env:PROJECT_SETUP_REQUIRES } else { "scripts/keiri.py" }
 $TOOLSET = if ($env:TOOLSET) { $env:TOOLSET } else { "lite" }
-$EXTRA_TOOLS = if ($env:EXTRA_TOOLS) { $env:EXTRA_TOOLS } else { "python playwright" }
+$EXTRA_TOOLS = if ($env:EXTRA_TOOLS) { $env:EXTRA_TOOLS } else { "python playwright vc-runtime" }
 $ENV_TEMPLATE = if ($env:ENV_TEMPLATE) { $env:ENV_TEMPLATE } else { ".env" }
 $ENV_TEMPLATE_KEYS = if ($env:ENV_TEMPLATE_KEYS) { $env:ENV_TEMPLATE_KEYS } else { "NOFU_API_URL NOFU_API_TOKEN DRY_RUN=1 ETAX_USER_ID ETAX_PASSWORD ELTAX_USER_ID ELTAX_PASSWORD" }
 $VSCODE_EXTENSIONS = if ($env:VSCODE_EXTENSIONS) { $env:VSCODE_EXTENSIONS } else { "anthropic.claude-code MS-CEINTL.vscode-language-pack-ja" }
@@ -139,13 +139,14 @@ if (-not $installer) {
   $instArgs = @()
   # インストーラへ渡す WITH_* は、irm | iex だと利用者の窓に残り、同じ窓で別プロファイルを実行したとき
   # 余計なツールまで入ってしまう。呼び出し後に元へ戻す
-  $prevWithFlags = @{ WITH_VSCODE = $env:WITH_VSCODE; WITH_PYTHON = $env:WITH_PYTHON; WITH_PLAYWRIGHT = $env:WITH_PLAYWRIGHT }
+  $prevWithFlags = @{ WITH_VSCODE = $env:WITH_VSCODE; WITH_PYTHON = $env:WITH_PYTHON; WITH_PLAYWRIGHT = $env:WITH_PLAYWRIGHT; WITH_VCRUNTIME = $env:WITH_VCRUNTIME }
   if ($TOOLSET -eq "lite") { $instArgs += "-Minimal"; $env:WITH_VSCODE = "1" }
   # lite でも案件に要るものだけを足す（full にすると gcloud/clasp のDLで10分近く延びる）
   foreach ($t in ($EXTRA_TOOLS -split '\s+')) {
     switch ($t) {
       "python"     { $env:WITH_PYTHON     = "1" }
       "playwright" { $env:WITH_PLAYWRIGHT = "1" }
+      "vc-runtime" { $env:WITH_VCRUNTIME  = "1" }
     }
   }
   if ($SkipVSCode)         { $instArgs += "-SkipVSCode"; $env:WITH_VSCODE = "0" }
@@ -169,9 +170,9 @@ foreach ($t in ($EXTRA_TOOLS -split '\s+')) {
 foreach ($t in $needTools) {
   if (Have $t) { OK $t } else { Fail $t ($t + " が見つかりません") }
 }
-# Python の部品（PyMuPDF/OpenCV 等）は Visual C++ ランタイムが無いと import が "DLL load failed" になる。
-# python コマンドがあるだけで PASS にしない（管理者でない PC ではインストーラが入れられないことがある）
-if ($needTools -contains "python") {
+# ネイティブ拡張（PyMuPDF/OpenCV 等）を使うプロファイルは EXTRA_TOOLS に vc-runtime を書く。無いと import が
+# "DLL load failed" になるため、python があるだけで PASS にしない（純 Python の用途では要求しない）
+if (($EXTRA_TOOLS -split '\s+') -contains "vc-runtime") {
   # 32bit の PowerShell では System32 が SysWOW64 へ読み替えられ、x64 ランタイムがあっても見えない
   $sys32 = if (Test-Path "$env:SystemRoot\Sysnative") { "$env:SystemRoot\Sysnative" } else { "$env:SystemRoot\System32" }
   if ((Test-Path "$sys32\msvcp140.dll") -and (Test-Path "$sys32\vcruntime140_1.dll")) { OK "Visual C++ ランタイム" }

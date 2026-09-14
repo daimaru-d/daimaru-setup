@@ -36,6 +36,7 @@ param(
   [switch]$Minimal,
   [switch]$WithPython,
   [switch]$WithPlaywright,
+  [switch]$WithVcRuntime,
   [switch]$UserScope,
   [switch]$SkipPython,
   [switch]$SkipGit,
@@ -54,6 +55,7 @@ $script:StartTime = Get-Date
 # onboard.ps1 からは環境変数で渡ってくる（WITH_VSCODE と同じ経路）
 if ($env:WITH_PYTHON     -eq '1') { $WithPython     = $true }
 if ($env:WITH_PLAYWRIGHT -eq '1') { $WithPlaywright = $true }
+if ($env:WITH_VCRUNTIME  -eq '1') { $WithVcRuntime  = $true }
 # 64bit の System32。32bit の PowerShell から見ると System32 は SysWOW64 へ読み替えられ、
 # x64 の Visual C++ ランタイムがあっても見えないため Sysnative を優先する
 $script:NativeSys32 = if (Test-Path "$env:SystemRoot\Sysnative") { "$env:SystemRoot\Sysnative" } else { "$env:SystemRoot\System32" }
@@ -141,9 +143,9 @@ function Show-Summary {
   # 明示指定した追加ツールも「入っていて当然」の扱いにする（PARTIAL で気づけるように）
   if ($WithPython -and $core -notcontains 'python') { $core += 'python' }
   if ($WithPlaywright) { $core += 'playwright' }
-  # Python の部品（PyMuPDF/OpenCV 等）は Visual C++ ランタイムが無いと import が "DLL load failed" になる。
-  # python があるだけで PASS にしない（UserScope では管理者が要るため入れられず、ここで PARTIAL になる）
-  if ($core -contains 'python') { $core += 'vc-runtime' }
+  # ネイティブ拡張（PyMuPDF/OpenCV 等）を使うプロファイルだけ Visual C++ ランタイムを必須にする（-WithVcRuntime）。
+  # 純 Python の用途（openpyxl だけ等）まで必須にすると、管理者で入れられない UserScope で不要な PARTIAL になる
+  if ($WithVcRuntime) { $core += 'vc-runtime' }
   $missing = @()
   foreach ($t in $core) {
     $present = if ($t -eq 'python') { HasPython }
