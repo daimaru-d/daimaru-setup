@@ -29,7 +29,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@ef2d8ff) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@370ab14) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -365,6 +365,9 @@ if (-not (Have "claude")) {
   Fail "claude" "claude が見つかりません"
 } elseif (Test-Path $claudeCred) {
   OK "ログイン済み"
+} elseif (-not $Check -and -not $script:Interactive) {
+  # 対話できない環境ではこの後のログインを行わないため、集計（Step 7）より前に未完了として数える
+  Fail "claude-login" "Claude 未ログイン（対話できない環境のためログインを飛ばしました）"
 } else {
   NG "未ログイン（この後の案内でログインします）"
   $needClaudeLogin = $true
@@ -429,8 +432,6 @@ if ($needClaudeLogin -and $script:Interactive) {
   # claude を閉じた後に、本当にログインできたかを確かめてから結果を出す
   if (Test-Path $claudeCred) { OK "Claude にログインできました" }
   else { Fail "claude-login" "Claude のログインが確認できませんでした（もう一度 claude を起動してログインしてください）"; $result = "PARTIAL"; $rc = 2 }
-} elseif ($needClaudeLogin) {
-  Fail "claude-login" "Claude 未ログイン（対話できない環境のためログインを飛ばしました）"; $result = "PARTIAL"; $rc = 2
 }
 
 Log "  次にやること"
