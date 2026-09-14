@@ -29,7 +29,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@179e793) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@ef2d8ff) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -333,10 +333,22 @@ if (-not $PROJECT_REPO -or $SkipProject) {
   if ((Test-Path $projGit) -and $PROJECT_SETUP_CMD) {
     Log "  + 依存パッケージを準備しています（数分かかります）..."
     Push-Location $PROJECT_DIR
+    # 子プロセス（Python/Node）の出力は UTF-8。コンソール既定の文字コード（cp932 等）で読むと
+    # 日本語が化けるため、この間だけ UTF-8 で受け取り、Python にも UTF-8 で出させる。
+    $prevOutEnc = $null
+    try { $prevOutEnc = [Console]::OutputEncoding; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+    $prevPyUtf8 = $env:PYTHONUTF8; $prevPyIoEnc = $env:PYTHONIOENCODING
+    $env:PYTHONUTF8 = "1"; $env:PYTHONIOENCODING = "utf-8"
     # 出力は捨てない。ブラウザのダウンロード等はここで長く止まるため、
     # 「固まった」のか「進んでいる」のかが見えないと現場で不安になる。
-    cmd /c $PROJECT_SETUP_CMD 2>&1 | ForEach-Object { if ($_) { Log ("    " + $_) } }
+    # 標準エラーは ErrorRecord で届くので、型名ではなく本文を表示する
+    cmd /c $PROJECT_SETUP_CMD 2>&1 | ForEach-Object {
+      $s = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { [string]$_ }
+      if ($s -and $s.Trim()) { Log ("    " + $s) }
+    }
     $setupRc = $LASTEXITCODE
+    $env:PYTHONUTF8 = $prevPyUtf8; $env:PYTHONIOENCODING = $prevPyIoEnc
+    if ($prevOutEnc) { try { [Console]::OutputEncoding = $prevOutEnc } catch { } }
     Pop-Location
     if ($setupRc -eq 0) { OK "準備完了" }
     elseif ($setupRc -eq 2) { Warn "準備はできました。上の点検で × の項目は、この後の案内に沿って対応してください" }
