@@ -1,4 +1,4 @@
-﻿# ！このファイルは GScale-jp/fde-setup (@946818c) から自動生成されています。
+﻿# ！このファイルは GScale-jp/fde-setup (@ad68f66) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 #Requires -Version 5.1
@@ -21,6 +21,7 @@
     -Minimal              コアのみ導入（node/git/gh/claude + Claude既定設定）
     -WithPython           -Minimal でも Python を入れる（積算Excel処理など）
     -WithPlaywright       Playwright と chromium を導入し、実際に起動して確認する
+    -WithVcRuntime        Visual C++ ランタイムを導入して必須に数える（PyMuPDF/OpenCV 等のネイティブ拡張用）
     -UserScope            管理者権限を使わず全てユーザー領域に導入（非管理者では自動ON）
     -SkipPython -SkipGit -SkipVSCode
     -RestoreCreds <zip>   backup_creds.ps1 / backup_creds.sh の出力から認証情報を復元
@@ -286,8 +287,13 @@ if (((-not $Minimal) -or $WithPython) -and (-not $SkipPython)) {
     Refresh-Path
     if (HasPython) { Log ("  OK " + (python --version 2>&1)) } else { Log "  X python 未導入" }
   }
-  # PyMuPDF / OpenCV などのホイールは MSVC ランタイム（msvcp140.dll 等）を前提にする。
-  # 素の Windows（Server 等）には無く import が "DLL load failed" になるため、無ければ入れる（GCE 実機で確認）
+}
+
+# ---- 3b. Visual C++ ランタイム（-WithVcRuntime / WITH_VCRUNTIME=1 のときだけ）----
+# PyMuPDF / OpenCV などのホイールは MSVC ランタイム（msvcp140.dll 等）を前提にし、素の Windows（Server 等）
+# では import が "DLL load failed" になる（GCE 実機で確認）。システム全体への変更なので、純 Python の用途では入れない
+if ($WithVcRuntime) {
+  Log "`n[3b] Visual C++ ランタイム"
   $vcOk = (Test-Path "$script:NativeSys32\msvcp140.dll") -and (Test-Path "$script:NativeSys32\vcruntime140_1.dll")
   if ($vcOk) { Log "  OK Visual C++ ランタイム" }
   elseif ($UserScope) { Log "  ! Visual C++ ランタイムがありません（管理者での導入が必要）: https://aka.ms/vs/17/release/vc_redist.x64.exe" }
