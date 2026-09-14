@@ -32,7 +32,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@66e460d) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@2c1099b) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -77,6 +77,8 @@ function Refresh-Path {
   $extra = @("$HOME\.local\bin", "$env:APPDATA\npm", "$env:LOCALAPPDATA\Programs\Python\Python312", "$env:LOCALAPPDATA\Programs\Python\Python312\Scripts", "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin", "$env:ProgramFiles\Microsoft VS Code\bin", "$env:LOCALAPPDATA\Programs\gh\bin", "$env:ProgramFiles\GitHub CLI", "$env:LOCALAPPDATA\Programs\node", "$env:LOCALAPPDATA\Programs\PortableGit\cmd")
   $env:Path = (@([System.Environment]::GetEnvironmentVariable("Path","Machine"), [System.Environment]::GetEnvironmentVariable("Path","User")) + $extra) -join ";"
 }
+# irm | iex では上の関数が利用者の PowerShell に残り、短い名前（Log/OK 等）が後の作業と衝突し得るため、返す前に消す
+$script:OnboardFunctions = @("Function:\Log", "Function:\Step", "Function:\OK", "Function:\NG", "Function:\Warn", "Function:\Fail", "Function:\Have", "Function:\LogLines", "Function:\Refresh-Path")
 
 if ($PROJECT_REPO -and -not $PROJECT_DIR) {
   $leaf = [System.IO.Path]::GetFileNameWithoutExtension($PROJECT_REPO)
@@ -362,14 +364,19 @@ if (-not $PROJECT_REPO -or $SkipProject) {
     # 出力は捨てない。ブラウザのダウンロード等はここで長く止まるため、
     # 「固まった」のか「進んでいる」のかが見えないと現場で不安になる。
     # 標準エラーは ErrorRecord で届くので、型名ではなく本文を表示する
-    cmd /c $PROJECT_SETUP_CMD 2>&1 | ForEach-Object {
-      $s = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { [string]$_ }
-      if ($s -and $s.Trim()) { Log ("    " + $s) }
+    $setupRc = 1
+    try {
+      cmd /c $PROJECT_SETUP_CMD 2>&1 | ForEach-Object {
+        $s = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { [string]$_ }
+        if ($s -and $s.Trim()) { Log ("    " + $s) }
+      }
+      $setupRc = $LASTEXITCODE
+    } finally {
+      # 長い準備の途中で Ctrl+C されても、利用者の窓の文字コード・環境変数・カレントフォルダを戻す
+      $env:PYTHONUTF8 = $prevPyUtf8; $env:PYTHONIOENCODING = $prevPyIoEnc
+      if ($prevOutEnc) { try { [Console]::OutputEncoding = $prevOutEnc } catch { } }
+      Pop-Location
     }
-    $setupRc = $LASTEXITCODE
-    $env:PYTHONUTF8 = $prevPyUtf8; $env:PYTHONIOENCODING = $prevPyIoEnc
-    if ($prevOutEnc) { try { [Console]::OutputEncoding = $prevOutEnc } catch { } }
-    Pop-Location
     if ($setupRc -eq 0) { OK "準備完了" }
     elseif ($setupRc -eq 2) { Warn "準備はできました。上の点検で × の項目は、この後の案内に沿って対応してください" }
     else { Fail "project-setup" ("依存パッケージの準備が終わりませんでした（終了コード " + $setupRc + "）。上の表示を確認してください") }
@@ -411,7 +418,7 @@ if ($Check) {
   Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
   $global:LASTEXITCODE = $rc
   $ErrorActionPreference = $script:PrevErrorActionPreference
-  if ($script:ViaIex) { return }
+  if ($script:ViaIex) { Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue; return }
   exit $rc
 }
 
@@ -471,5 +478,5 @@ Log ""
 Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
 $global:LASTEXITCODE = $rc
 $ErrorActionPreference = $script:PrevErrorActionPreference
-if ($script:ViaIex) { return }
+if ($script:ViaIex) { Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue; return }
 exit $rc
