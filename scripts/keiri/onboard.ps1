@@ -25,6 +25,10 @@ param(
   [switch]$SkipProject
 )
 
+# irm | iex では呼び出し元のスコープで動く。ここから作る・上書きする変数を、返す前に元へ戻すための控え
+$script:VarSnapshot = @{}
+foreach ($__v in @(Get-Variable)) { $script:VarSnapshot[$__v.Name] = $__v.Value }
+
 # irm | iex では呼び出し元の PowerShell のスコープで動くため、変えた設定は戻ってから返す
 $script:PrevErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
@@ -32,7 +36,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@ad68f66) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@d9c8324) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -55,8 +59,9 @@ $NEXT_HINT = if ($env:NEXT_HINT) { $env:NEXT_HINT } else { "    VS Code で Clau
 $TOTAL = 7
 $script:Failed = @()
 $script:NeedEnvFill = $null
-# irm | iex では $PSCommandPath が空になる（-File 実行では入る）
-$script:ViaIex = [string]::IsNullOrEmpty($PSCommandPath)
+# irm | iex か -File 実行かを見分ける。$PSCommandPath は iex だと呼び出し元のもの（ラッパーの .ps1 から iex すると
+# ラッパーのパス）になるため、空かどうかではなく「そのファイルが本スクリプト自身か」で判定する
+$script:ViaIex = -not ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath) -and (Select-String -LiteralPath $PSCommandPath -SimpleMatch -Quiet -Pattern '# >>> PROFILE >>>'))
 # サービス/スケジューラ/CI などコンソール入力が無い環境では、Read-Host やブラウザログインで
 # 永久に止まらないよう対話部分を飛ばす
 $script:Interactive = [Environment]::UserInteractive -and -not ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' })
@@ -84,11 +89,32 @@ function LogLines($lines) { foreach ($l in @($lines)) { $s = [string]$l; if ($s.
 function Refresh-Path {
   # install_all.ps1 の Refresh-Path と同じ既定の導入先も足す（ユーザー PATH に登録されない場所がある）
   $extra = @("$HOME\.local\bin", "$env:APPDATA\npm", "$env:LOCALAPPDATA\Programs\Python\Python312", "$env:LOCALAPPDATA\Programs\Python\Python312\Scripts", "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin", "$env:ProgramFiles\Microsoft VS Code\bin", "$env:LOCALAPPDATA\Programs\gh\bin", "$env:ProgramFiles\GitHub CLI", "$env:LOCALAPPDATA\Programs\node", "$env:LOCALAPPDATA\Programs\PortableGit\cmd")
-  $env:Path = (@([System.Environment]::GetEnvironmentVariable("Path","Machine"), [System.Environment]::GetEnvironmentVariable("Path","User")) + $extra) -join ";"
+  # 利用者の窓だけにある PATH（venv 等）は残し、足りない導入先だけを前に足す（前に置くのは、新しく入れた
+  # Python 等が WindowsApps の python スタブより先に見つかるようにするため）
+  $current = @($env:Path -split ';' | Where-Object { $_ })
+  $persisted = @(([System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")) -split ';' | Where-Object { $_ }) + $extra
+  $env:Path = (@($persisted | Where-Object { $current -notcontains $_ }) + $current) -join ";"
 }
 # irm | iex では上の関数が利用者の PowerShell に残り、短い名前（Log/OK 等）が後の作業と衝突し得るため、
 # 返す前に消し、控えておいた利用者の元の定義を戻す
 $script:OnboardFunctions = @($script:OnboardFunctionNames | ForEach-Object { "Function:\" + $_ })
+
+# iex で返す直前に呼び出し元の状態を戻す（dot-source で呼び出し元のスコープのまま実行する）。
+# 関数: 本スクリプトのものを消し、利用者の同名関数を戻す / 変数: 増えたものは消し、上書きしたものは元の値に戻す。
+# $LASTEXITCODE は結果を伝えるため、ErrorActionPreference は個別に戻すため対象外
+$script:RestoreCaller = {
+  Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue
+  foreach ($k in @($script:SavedFunctions.Keys)) { Set-Item -Path ("Function:\" + $k) -Value $script:SavedFunctions[$k] }
+  $snap = $script:VarSnapshot
+  $keep = @('LASTEXITCODE', 'ErrorActionPreference', 'snap', 'keep', 'var', '?', '^', '$', '_', 'args', 'input', 'PSItem', 'Error', 'PWD', 'Host', 'MyInvocation', 'PSBoundParameters', 'PSCommandPath', 'PSScriptRoot', 'Matches', 'foreach', 'switch', 'this', 'StackTrace', 'ExecutionContext')
+  foreach ($var in @(Get-Variable)) {
+    if ($keep -contains $var.Name) { continue }
+    if ($var.Options -band ([System.Management.Automation.ScopedItemOptions]::ReadOnly -bor [System.Management.Automation.ScopedItemOptions]::Constant)) { continue }
+    if ($snap.ContainsKey($var.Name)) { Set-Variable -Name $var.Name -Value $snap[$var.Name] -ErrorAction SilentlyContinue }
+    else { Remove-Variable -Name $var.Name -Force -ErrorAction SilentlyContinue }
+  }
+  Remove-Variable -Name snap, keep, var -ErrorAction SilentlyContinue
+}
 
 if ($PROJECT_REPO -and -not $PROJECT_DIR) {
   $leaf = [System.IO.Path]::GetFileNameWithoutExtension($PROJECT_REPO)
@@ -441,7 +467,7 @@ if ($Check) {
   Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
   $global:LASTEXITCODE = $rc
   $ErrorActionPreference = $script:PrevErrorActionPreference
-  if ($script:ViaIex) { Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue; foreach ($k in @($script:SavedFunctions.Keys)) { Set-Item -Path ("Function:\" + $k) -Value $script:SavedFunctions[$k] }; return }
+  if ($script:ViaIex) { . $script:RestoreCaller; return }
   exit $rc
 }
 
@@ -501,5 +527,5 @@ Log ""
 Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
 $global:LASTEXITCODE = $rc
 $ErrorActionPreference = $script:PrevErrorActionPreference
-if ($script:ViaIex) { Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue; foreach ($k in @($script:SavedFunctions.Keys)) { Set-Item -Path ("Function:\" + $k) -Value $script:SavedFunctions[$k] }; return }
+if ($script:ViaIex) { . $script:RestoreCaller; return }
 exit $rc
