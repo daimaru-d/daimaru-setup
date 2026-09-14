@@ -32,14 +32,14 @@ else                                    TTY_IN=/dev/null;  STDIN_WAS_TTY=0
 fi
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@a6917d8) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@179e793) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 : "${PROFILE_ID:=daimaru-keiri}"
 : "${PROFILE_NAME:=大丸開発グループ 総務経理 自動化}"
 : "${PROJECT_REPO:=https://github.com/daimaru-d/daimaru-keiri-automation.git}"
 : "${PROJECT_DIR:=$HOME/daimaru-keiri-automation}"
-: "${PROJECT_SETUP_CMD:=python scripts/keiri.py bootstrap || (npm install playwright && npx --yes playwright install chromium)}"
+: "${PROJECT_SETUP_CMD:=python scripts/keiri.py bootstrap}"
 : "${TOOLSET:=lite}"
 : "${EXTRA_TOOLS:=python playwright}"
 : "${ENV_TEMPLATE:=.env}"
@@ -234,8 +234,14 @@ fi
 if [ "$CHECK_ONLY" = "0" ] && gh auth status >/dev/null 2>&1; then
   gh auth setup-git >/dev/null 2>&1 && ok "git が GitHub を使えるようになりました"
 
-  # リポジトリ招待を自動で承諾（メールのボタンを押しに行く手間をなくす）
-  INV="$(gh api user/repository_invitations --jq '.[].id' 2>/dev/null || true)"
+  # リポジトリ招待を自動で承諾（メールのボタンを押しに行く手間をなくす）。
+  # 無関係な招待まで勝手に受けないよう、対象リポジトリと同じ持ち主（組織）の招待だけにする。
+  INV_OWNER="$(printf '%s' "$PROJECT_REPO" | sed -nE 's#.*github\.com[:/]+([^/]+)/.*#\1#p')"
+  if [ -n "$INV_OWNER" ]; then
+    INV="$(gh api user/repository_invitations --jq ".[] | select(.repository.owner.login == \"$INV_OWNER\") | .id" 2>/dev/null || true)"
+  else
+    INV="$(gh api user/repository_invitations --jq '.[].id' 2>/dev/null || true)"
+  fi
   if [ -n "$INV" ]; then
     for id in $INV; do gh api --method PATCH "user/repository_invitations/$id" >/dev/null 2>&1 && ok "リポジトリの招待を承諾しました"; done
   fi
@@ -264,11 +270,11 @@ if [ -n "$PROJECT_REPO" ] && has gh && gh auth status >/dev/null 2>&1; then
   MY_LOGIN="$(gh api user --jq .login 2>/dev/null)"
   CAN_PUSH="$(gh api "repos/$SLUG" --jq '.permissions.push' 2>/dev/null || echo unknown)"
   if [ "$CAN_PUSH" = "true" ]; then
-    ok "このリポジトリに公開できます"
+    ok "このリポジトリに書き込めます"
   else
     NEED_ACCESS=1
-    warn "まだ公開の権限がありません（読むことはできます）"
-    warn "GitHub ユーザー名「${MY_LOGIN}」をグループに投稿してください（権限をお付けします）"
+    warn "まだ書き込みの権限がありません（読むことはできます）"
+    warn "GitHub ユーザー名「${MY_LOGIN}」を担当者に伝えてください（権限をお付けします）"
   fi
 fi
 
@@ -325,20 +331,10 @@ else
       [ -n "$CLONE_ERR" ] && log "  理由: $(printf '%s' "$CLONE_ERR" | head -3)"
     }
   fi
-  if [ -d "$PROJECT_DIR" ] && [ -n "$PROJECT_SETUP_CMD" ]; then
-    log "  + 依存パッケージを準備しています（数分かかります）..."
-    # 出力は捨てない。ブラウザのダウンロード等はここで長く止まるため、
-    # 「固まった」のか「進んでいる」のかが見えないと現場で不安になる。
-    if ( set -o pipefail; cd "$PROJECT_DIR" && eval "$PROJECT_SETUP_CMD" 2>&1 | sed 's/^/    /' ); then
-      ok "準備完了"
-    else
-      warn "依存パッケージの準備に失敗（後で再実行できます）"
-    fi
-  fi
-
   # 認証情報ファイル（.env）のひな形。値は本人に入力してもらう。
   # ここでは絶対に read で受け取らない（このスクリプトは実行ログを残すため）。
-  if [ -d "$PROJECT_DIR" ] && [ -n "$ENV_TEMPLATE" ]; then
+  # PROJECT_SETUP_CMD の点検がひな形の有無を見られるよう、準備より先に作る。
+  if [ -d "$PROJECT_DIR/.git" ] && [ -n "$ENV_TEMPLATE" ]; then
     ENV_PATH="$PROJECT_DIR/$ENV_TEMPLATE"
     if [ -f "$ENV_PATH" ]; then
       ok "設定ファイルは作成済み: $ENV_TEMPLATE"
@@ -351,6 +347,22 @@ else
       chmod 600 "$ENV_PATH" 2>/dev/null || true
       ok "設定ファイルのひな形を作成: $ENV_PATH"
       NEED_ENV_FILL="$ENV_PATH"
+    fi
+  fi
+
+  if [ -d "$PROJECT_DIR/.git" ] && [ -n "$PROJECT_SETUP_CMD" ]; then
+    log "  + 依存パッケージを準備しています（数分かかります）..."
+    # 出力は捨てない。ブラウザのダウンロード等はここで長く止まるため、
+    # 「固まった」のか「進んでいる」のかが見えないと現場で不安になる。
+    # 終了コード 2 は「準備はできたが人の対応待ち（未入力の設定など）」の約束（onboard.ps1 と同じ）
+    SETUP_RC=0
+    ( set -o pipefail; cd "$PROJECT_DIR" && eval "$PROJECT_SETUP_CMD" 2>&1 | sed 's/^/    /' ) || SETUP_RC=$?
+    if [ "$SETUP_RC" = "0" ]; then
+      ok "準備完了"
+    elif [ "$SETUP_RC" = "2" ]; then
+      warn "準備はできました。上の点検で × の項目は、この後の案内に沿って対応してください"
+    else
+      fail project-setup "依存パッケージの準備が終わりませんでした（終了コード ${SETUP_RC}）。上の表示を確認してください"
     fi
   fi
 fi
@@ -424,8 +436,8 @@ fi
 if [ "${NEED_ACCESS:-0}" = "1" ]; then
   log ""
   log "  ${C_Y}${C_B}【ひとつだけお願いです】${C_N}"
-  log "  ${C_B}GitHub ユーザー名「${MY_LOGIN:-}」をグループに投稿してください。${C_N}"
-  log "  これが無いと、当日ホームページを公開するところまで進めません。"
+  log "  ${C_B}GitHub ユーザー名「${MY_LOGIN:-}」を担当者に伝えてください。${C_N}"
+  log "  これが無いと、作業内容を GitHub に保存（同期）するところまで進めません。"
 fi
 
 log ""
