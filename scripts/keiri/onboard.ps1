@@ -25,12 +25,14 @@ param(
   [switch]$SkipProject
 )
 
+# irm | iex では呼び出し元の PowerShell のスコープで動くため、変えた設定は戻ってから返す
+$script:PrevErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 # 古い .NET 既定（TLS1.0）だと GitHub からの取得が理由不明で失敗するため
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@5cc4ca1) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@66e460d) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -408,6 +410,7 @@ if ($Check) {
   Log ""
   Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
   $global:LASTEXITCODE = $rc
+  $ErrorActionPreference = $script:PrevErrorActionPreference
   if ($script:ViaIex) { return }
   exit $rc
 }
@@ -449,7 +452,16 @@ if ($needClaudeLogin -and $script:Interactive) {
   claude
   # claude を閉じた後に、本当にログインできたかを確かめてから結果を出す
   if (Test-Path $claudeCred) { OK "Claude にログインできました" }
-  else { Fail "claude-login" "Claude のログインが確認できませんでした（もう一度 claude を起動してログインしてください）"; $result = "PARTIAL"; $rc = 2 }
+  else {
+    Fail "claude-login" "Claude のログインが確認できませんでした（もう一度 claude を起動してログインしてください）"
+    $result = "PARTIAL"; $rc = 2
+    # Step 7 の「準備できました！」はログイン前に出ているため、未完了の一覧を出し直して食い違いを残さない
+    Log ""
+    Log "== 未完了があります =="
+    foreach ($f in $script:Failed) { Log ("  ・" + $f) }
+    Log "  この画面をそのままスクリーンショットして送ってください。"
+    Log ("  ログ: " + $LogFile)
+  }
 }
 
 Log "  次にやること"
@@ -458,5 +470,6 @@ elseif ($PROJECT_DIR) { Log ("    cd " + $PROJECT_DIR + "; claude") }
 Log ""
 Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
 $global:LASTEXITCODE = $rc
+$ErrorActionPreference = $script:PrevErrorActionPreference
 if ($script:ViaIex) { return }
 exit $rc

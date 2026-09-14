@@ -1,4 +1,4 @@
-﻿# ！このファイルは GScale-jp/fde-setup (@5cc4ca1) から自動生成されています。
+﻿# ！このファイルは GScale-jp/fde-setup (@66e460d) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 #Requires -Version 5.1
