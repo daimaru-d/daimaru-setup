@@ -1,4 +1,4 @@
-﻿# ！このファイルは GScale-jp/fde-setup (@d12cadc) から自動生成されています。
+﻿# ！このファイルは GScale-jp/fde-setup (@c27a2b5) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 #Requires -Version 5.1
@@ -54,6 +54,9 @@ $script:StartTime = Get-Date
 # onboard.ps1 からは環境変数で渡ってくる（WITH_VSCODE と同じ経路）
 if ($env:WITH_PYTHON     -eq '1') { $WithPython     = $true }
 if ($env:WITH_PLAYWRIGHT -eq '1') { $WithPlaywright = $true }
+# 64bit の System32。32bit の PowerShell から見ると System32 は SysWOW64 へ読み替えられ、
+# x64 の Visual C++ ランタイムがあっても見えないため Sysnative を優先する
+$script:NativeSys32 = if (Test-Path "$env:SystemRoot\Sysnative") { "$env:SystemRoot\Sysnative" } else { "$env:SystemRoot\System32" }
 
 function Has($c) { [bool](Get-Command $c -ErrorAction SilentlyContinue) }
 function Log($m) { Write-Host $m }
@@ -144,7 +147,7 @@ function Show-Summary {
   $missing = @()
   foreach ($t in $core) {
     $present = if ($t -eq 'python') { HasPython }
-               elseif ($t -eq 'vc-runtime') { (Test-Path "$env:SystemRoot\System32\msvcp140.dll") -and (Test-Path "$env:SystemRoot\System32\vcruntime140_1.dll") }
+               elseif ($t -eq 'vc-runtime') { (Test-Path "$script:NativeSys32\msvcp140.dll") -and (Test-Path "$script:NativeSys32\vcruntime140_1.dll") }
                else { Has $t }
     if ($present) { Log "  OK  $t" } else { Log "  --  $t（未導入 / 新シェルで反映の場合あり）"; $missing += $t }
   }
@@ -283,7 +286,7 @@ if (((-not $Minimal) -or $WithPython) -and (-not $SkipPython)) {
   }
   # PyMuPDF / OpenCV などのホイールは MSVC ランタイム（msvcp140.dll 等）を前提にする。
   # 素の Windows（Server 等）には無く import が "DLL load failed" になるため、無ければ入れる（GCE 実機で確認）
-  $vcOk = (Test-Path "$env:SystemRoot\System32\msvcp140.dll") -and (Test-Path "$env:SystemRoot\System32\vcruntime140_1.dll")
+  $vcOk = (Test-Path "$script:NativeSys32\msvcp140.dll") -and (Test-Path "$script:NativeSys32\vcruntime140_1.dll")
   if ($vcOk) { Log "  OK Visual C++ ランタイム" }
   elseif ($UserScope) { Log "  ! Visual C++ ランタイムがありません（管理者での導入が必要）: https://aka.ms/vs/17/release/vc_redist.x64.exe" }
   else {

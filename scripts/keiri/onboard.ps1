@@ -32,7 +32,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@d12cadc) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@c27a2b5) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -172,7 +172,9 @@ foreach ($t in $needTools) {
 # Python の部品（PyMuPDF/OpenCV 等）は Visual C++ ランタイムが無いと import が "DLL load failed" になる。
 # python コマンドがあるだけで PASS にしない（管理者でない PC ではインストーラが入れられないことがある）
 if ($needTools -contains "python") {
-  if ((Test-Path "$env:SystemRoot\System32\msvcp140.dll") -and (Test-Path "$env:SystemRoot\System32\vcruntime140_1.dll")) { OK "Visual C++ ランタイム" }
+  # 32bit の PowerShell では System32 が SysWOW64 へ読み替えられ、x64 ランタイムがあっても見えない
+  $sys32 = if (Test-Path "$env:SystemRoot\Sysnative") { "$env:SystemRoot\Sysnative" } else { "$env:SystemRoot\System32" }
+  if ((Test-Path "$sys32\msvcp140.dll") -and (Test-Path "$sys32\vcruntime140_1.dll")) { OK "Visual C++ ランタイム" }
   else { Fail "vc-runtime" "Visual C++ ランタイムがありません（管理者で https://aka.ms/vs/17/release/vc_redist.x64.exe を実行してください）" }
 }
 
