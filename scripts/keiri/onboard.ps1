@@ -17,6 +17,7 @@
 #
 # PROJECT_SETUP_CMD の終了コード: 0=準備完了 / 2=準備はできたが人の対応待ち（未入力の設定など。
 #   未完了にはしない）/ それ以外=失敗（未完了に数える）
+#   2 はインタプリタの「ファイルが無い」とも重なるため、前提ファイルを PROJECT_SETUP_REQUIRES で宣言する
 # =============================================================================
 param(
   [switch]$Check,
@@ -29,7 +30,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@370ab14) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@2d9a3d1) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -37,6 +38,7 @@ $PROFILE_NAME = if ($env:PROFILE_NAME) { $env:PROFILE_NAME } else { "大丸開�
 $PROJECT_REPO = if ($env:PROJECT_REPO) { $env:PROJECT_REPO } else { "https://github.com/daimaru-d/daimaru-keiri-automation.git" }
 $PROJECT_DIR = if ($env:PROJECT_DIR) { $env:PROJECT_DIR } else { "$HOME/daimaru-keiri-automation" }
 $PROJECT_SETUP_CMD = if ($env:PROJECT_SETUP_CMD) { $env:PROJECT_SETUP_CMD } else { "python scripts/keiri.py bootstrap" }
+$PROJECT_SETUP_REQUIRES = if ($env:PROJECT_SETUP_REQUIRES) { $env:PROJECT_SETUP_REQUIRES } else { "scripts/keiri.py" }
 $TOOLSET = if ($env:TOOLSET) { $env:TOOLSET } else { "lite" }
 $EXTRA_TOOLS = if ($env:EXTRA_TOOLS) { $env:EXTRA_TOOLS } else { "python playwright" }
 $ENV_TEMPLATE = if ($env:ENV_TEMPLATE) { $env:ENV_TEMPLATE } else { ".env" }
@@ -330,7 +332,20 @@ if (-not $PROJECT_REPO -or $SkipProject) {
     }
   }
 
-  if ((Test-Path $projGit) -and $PROJECT_SETUP_CMD) {
+  # 準備コマンドが前提とするファイル（例: scripts/keiri.py）。最新に更新できず古いままだと
+  # コマンド自体が「ファイルが無い」で終了コード 2 を返し、「人の対応待ち」と区別できないため先に確かめる
+  $setupReady = $true
+  if ((Test-Path $projGit) -and $PROJECT_SETUP_CMD -and $PROJECT_SETUP_REQUIRES) {
+    foreach ($req in ($PROJECT_SETUP_REQUIRES -split '\s+')) {
+      if ($req -and -not (Test-Path (Join-Path $PROJECT_DIR $req))) {
+        $setupReady = $false
+        Fail "project-setup" ("準備に必要な " + $req + " がありません。プロジェクトを最新にできていない可能性があります（上の更新の表示を確認してください）")
+        break
+      }
+    }
+  }
+
+  if ((Test-Path $projGit) -and $PROJECT_SETUP_CMD -and $setupReady) {
     Log "  + 依存パッケージを準備しています（数分かかります）..."
     Push-Location $PROJECT_DIR
     # 子プロセス（Python/Node）の出力は UTF-8。コンソール既定の文字コード（cp932 等）で読むと

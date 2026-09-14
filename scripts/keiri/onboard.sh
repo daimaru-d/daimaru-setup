@@ -32,7 +32,7 @@ else                                    TTY_IN=/dev/null;  STDIN_WAS_TTY=0
 fi
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@370ab14) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@2d9a3d1) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 : "${PROFILE_ID:=daimaru-keiri}"
@@ -40,6 +40,7 @@ fi
 : "${PROJECT_REPO:=https://github.com/daimaru-d/daimaru-keiri-automation.git}"
 : "${PROJECT_DIR:=$HOME/daimaru-keiri-automation}"
 : "${PROJECT_SETUP_CMD:=python scripts/keiri.py bootstrap}"
+: "${PROJECT_SETUP_REQUIRES:=scripts/keiri.py}"
 : "${TOOLSET:=lite}"
 : "${EXTRA_TOOLS:=python playwright}"
 : "${ENV_TEMPLATE:=.env}"
@@ -350,7 +351,20 @@ else
     fi
   fi
 
+  # 準備コマンドが前提とするファイル。古いままだとコマンド自体が「ファイルが無い」で 2 を返し、
+  # 「人の対応待ち」と区別できないため先に確かめる（onboard.ps1 と同じ）
+  SETUP_READY=1
   if [ -d "$PROJECT_DIR/.git" ] && [ -n "$PROJECT_SETUP_CMD" ]; then
+    for req in $PROJECT_SETUP_REQUIRES; do
+      if [ ! -e "$PROJECT_DIR/$req" ]; then
+        SETUP_READY=0
+        fail project-setup "準備に必要な $req がありません。プロジェクトを最新にできていない可能性があります（上の更新の表示を確認してください）"
+        break
+      fi
+    done
+  fi
+
+  if [ -d "$PROJECT_DIR/.git" ] && [ -n "$PROJECT_SETUP_CMD" ] && [ "$SETUP_READY" = "1" ]; then
     log "  + 依存パッケージを準備しています（数分かかります）..."
     # 出力は捨てない。ブラウザのダウンロード等はここで長く止まるため、
     # 「固まった」のか「進んでいる」のかが見えないと現場で不安になる。
