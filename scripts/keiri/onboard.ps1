@@ -38,7 +38,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@35b9e95) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@80d1fd1) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -106,20 +106,22 @@ $script:OnboardFunctions = @($script:OnboardFunctionNames | ForEach-Object { "Fu
 # $LASTEXITCODE は結果を伝えるため、ErrorActionPreference は個別に戻すため対象外
 $script:RestoreCaller = {
   Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue
-  foreach ($k in @($script:SavedFunctions.Keys)) { Set-Item -Path ("Function:\" + $k) -Value $script:SavedFunctions[$k] }
-  $snap = $script:__GScaleOnboardSnapshot
-  $keep = @('LASTEXITCODE', 'ErrorActionPreference', 'snap', 'keep', 'var', 'opt', '?', '^', '$', '_', 'args', 'input', 'PSItem', 'Error', 'PWD', 'Host', 'MyInvocation', 'PSBoundParameters', 'PSCommandPath', 'PSScriptRoot', 'Matches', 'foreach', 'switch', 'this', 'StackTrace', 'ExecutionContext')
-  foreach ($var in @(Get-Variable)) {
-    # 1 つの変数で失敗しても後始末全体を止めない（読み取り専用・特殊な自動変数は触らない）
+  # 後始末で使う一時変数は利用者の変数と衝突しない名前にする（$var 等を使うと利用者の同名変数を消してしまう）
+  foreach ($__gso_k in @($script:SavedFunctions.Keys)) { Set-Item -Path ("Function:\" + $__gso_k) -Value $script:SavedFunctions[$__gso_k] }
+  $__gso_snap = $script:__GScaleOnboardSnapshot
+  $__gso_keep = @('LASTEXITCODE', 'ErrorActionPreference', '__gso_snap', '__gso_keep', '__gso_var', '__gso_opt', '__gso_k', '?', '^', '$', '_', 'args', 'input', 'PSItem', 'Error', 'PWD', 'Host', 'MyInvocation', 'PSBoundParameters', 'PSCommandPath', 'PSScriptRoot', 'Matches', 'foreach', 'switch', 'this', 'StackTrace', 'ExecutionContext')
+  foreach ($__gso_var in @(Get-Variable)) {
+    # 1 つの変数で失敗しても後始末全体を止めない。読み取り専用・特殊な自動変数は触らない。
+    # try の中では continue を使わず if で分岐する（ループ制御と例外処理を混ぜない）
     try {
-      if ($keep -contains $var.Name) { continue }
-      $opt = [string]$var.Options
-      if ($opt -match 'ReadOnly|Constant') { continue }
-      if ($snap.ContainsKey($var.Name)) { Set-Variable -Name $var.Name -Value $snap[$var.Name] -ErrorAction SilentlyContinue }
-      else { Remove-Variable -Name $var.Name -Force -ErrorAction SilentlyContinue }
+      $__gso_opt = [string]$__gso_var.Options
+      if (($__gso_keep -notcontains $__gso_var.Name) -and ($__gso_opt -notmatch 'ReadOnly|Constant')) {
+        if ($__gso_snap.ContainsKey($__gso_var.Name)) { Set-Variable -Name $__gso_var.Name -Value $__gso_snap[$__gso_var.Name] -ErrorAction SilentlyContinue }
+        else { Remove-Variable -Name $__gso_var.Name -Force -ErrorAction SilentlyContinue }
+      }
     } catch { }
   }
-  Remove-Variable -Name snap, keep, var, opt -ErrorAction SilentlyContinue
+  Remove-Variable -Name __gso_snap, __gso_keep, __gso_var, __gso_opt, __gso_k -ErrorAction SilentlyContinue
 }
 
 if ($PROJECT_REPO -and -not $PROJECT_DIR) {
@@ -200,7 +202,10 @@ foreach ($t in ($EXTRA_TOOLS -split '\s+')) {
   if ($t -eq "playwright") { $needTools += "playwright" }
 }
 foreach ($t in $needTools) {
-  if (Have $t) { OK $t } else { Fail $t ($t + " が見つかりません") }
+  $present = Have $t
+  # Microsoft Store の python.exe スタブ（実行するとストアが開くだけ）を導入済と誤認しない（install_all.ps1 の HasPython と同じ）
+  if ($present -and $t -eq "python") { $present = -not ((Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1).Source -like '*WindowsApps*') }
+  if ($present) { OK $t } else { Fail $t ($t + " が見つかりません") }
 }
 # ネイティブ拡張（PyMuPDF/OpenCV 等）を使うプロファイルは EXTRA_TOOLS に vc-runtime を書く。無いと import が
 # "DLL load failed" になるため、python があるだけで PASS にしない（純 Python の用途では要求しない）
