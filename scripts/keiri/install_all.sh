@@ -1,4 +1,4 @@
-# ！このファイルは GScale-jp/fde-setup (@2d9a3d1) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@5cc4ca1) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 #!/usr/bin/env bash

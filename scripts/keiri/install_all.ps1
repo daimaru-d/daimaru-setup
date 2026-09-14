@@ -1,4 +1,4 @@
-﻿# ！このファイルは GScale-jp/fde-setup (@2d9a3d1) から自動生成されています。
+﻿# ！このファイルは GScale-jp/fde-setup (@5cc4ca1) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 #Requires -Version 5.1
@@ -275,6 +275,22 @@ if (((-not $Minimal) -or $WithPython) -and (-not $SkipPython)) {
     } catch { Log ("  X Python 失敗: " + $_.Exception.Message) }
     Refresh-Path
     if (HasPython) { Log ("  OK " + (python --version 2>&1)) } else { Log "  X python 未導入" }
+  }
+  # PyMuPDF / OpenCV などのホイールは MSVC ランタイム（msvcp140.dll 等）を前提にする。
+  # 素の Windows（Server 等）には無く import が "DLL load failed" になるため、無ければ入れる（GCE 実機で確認）
+  $vcOk = (Test-Path "$env:SystemRoot\System32\msvcp140.dll") -and (Test-Path "$env:SystemRoot\System32\vcruntime140_1.dll")
+  if ($vcOk) { Log "  OK Visual C++ ランタイム" }
+  elseif ($UserScope) { Log "  ! Visual C++ ランタイムがありません（管理者での導入が必要）: https://aka.ms/vs/17/release/vc_redist.x64.exe" }
+  else {
+    try {
+      $vcexe = "$env:TEMP\vc_redist.x64.exe"
+      Log "  DL https://aka.ms/vs/17/release/vc_redist.x64.exe"
+      Invoke-FdeDownload "https://aka.ms/vs/17/release/vc_redist.x64.exe" $vcexe
+      $vp = Start-Process $vcexe -ArgumentList "/install /quiet /norestart" -Wait -PassThru
+      # 1638=より新しい版が導入済み / 3010=再起動待ち（DLL は配置済みで使える）
+      if ($vp.ExitCode -in 0, 1638, 3010) { Log "  OK Visual C++ ランタイム 導入" }
+      else { Log ("  X Visual C++ ランタイム失敗 (exit " + $vp.ExitCode + ")") }
+    } catch { Log ("  X Visual C++ ランタイム失敗: " + $_.Exception.Message) }
   }
 }
 

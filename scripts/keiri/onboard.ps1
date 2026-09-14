@@ -30,7 +30,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@2d9a3d1) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@5cc4ca1) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -141,6 +141,9 @@ if (-not $installer) {
 }
 
 $needTools = @("git","node","gh","claude")
+# full はインストーラが clasp/python/gcloud/uv まで入れる。ここで確かめないと、それらが入らず
+# インストーラが PARTIAL(2) を返しても、下の判定だけ見て PASS と表示してしまう
+if ($TOOLSET -ne "lite") { $needTools += @("clasp","python","gcloud","uv") }
 foreach ($t in ($EXTRA_TOOLS -split '\s+')) {
   if ($t -eq "python")     { $needTools += "python" }
   if ($t -eq "playwright") { $needTools += "playwright" }
