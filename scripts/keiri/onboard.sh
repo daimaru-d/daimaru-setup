@@ -32,7 +32,7 @@ else                                    TTY_IN=/dev/null;  STDIN_WAS_TTY=0
 fi
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@2c1099b) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@4a459f8) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 : "${PROFILE_ID:=daimaru-keiri}"
@@ -171,8 +171,9 @@ else
 fi
 
 NEED_TOOLS="git node gh claude"
-# full はインストーラが clasp/python3/gcloud/uv まで入れる。確かめないと入らなくても PASS になる（onboard.ps1 と同じ）
-[ "$TOOLSET" != "lite" ] && NEED_TOOLS="$NEED_TOOLS clasp python3 gcloud uv"
+# full はインストーラが npm/clasp/python3/gcloud/uv/uvx まで必須にする（install_all.sh の core と同じ集合）。
+# 確かめないと入らなくても PASS になる（onboard.ps1 と同じ）
+[ "$TOOLSET" != "lite" ] && NEED_TOOLS="$NEED_TOOLS npm clasp python3 gcloud uv uvx"
 for t in $EXTRA_TOOLS; do
   case "$t" in
     python)     NEED_TOOLS="$NEED_TOOLS python3" ;;

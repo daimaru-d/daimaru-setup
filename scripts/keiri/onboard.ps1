@@ -32,7 +32,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@2c1099b) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@4a459f8) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -63,6 +63,15 @@ $script:Interactive = [Environment]::UserInteractive -and -not ([Environment]::G
 $LogFile = Join-Path $env:USERPROFILE "gscale-onboard.log"
 if (-not $Check) { "" | Out-File -FilePath $LogFile -Encoding utf8 }
 
+# irm | iex では下の関数が利用者の PowerShell に定義される。利用者が同名の関数（Log/OK 等）を持っていたら
+# 上書き前の定義を控えておき、返す前に戻す（消しっぱなし・上書きしっぱなしにしない）
+$script:OnboardFunctionNames = @("Log", "Step", "OK", "NG", "Warn", "Fail", "Have", "LogLines", "Refresh-Path")
+$script:SavedFunctions = @{}
+foreach ($fn in $script:OnboardFunctionNames) {
+  $prev = Get-Item -Path ("Function:\" + $fn) -ErrorAction SilentlyContinue
+  if ($prev) { $script:SavedFunctions[$fn] = $prev.ScriptBlock }
+}
+
 function Log($m)  { Write-Host $m; if (-not $Check) { $m | Out-File -FilePath $LogFile -Append -Encoding utf8 } }
 function Step($n,$t) { Log ""; Log ("[{0}/{1}] {2}" -f $n,$TOTAL,$t) }
 function OK($m)   { Log ("  OK  " + $m) }
@@ -77,8 +86,9 @@ function Refresh-Path {
   $extra = @("$HOME\.local\bin", "$env:APPDATA\npm", "$env:LOCALAPPDATA\Programs\Python\Python312", "$env:LOCALAPPDATA\Programs\Python\Python312\Scripts", "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin", "$env:ProgramFiles\Microsoft VS Code\bin", "$env:LOCALAPPDATA\Programs\gh\bin", "$env:ProgramFiles\GitHub CLI", "$env:LOCALAPPDATA\Programs\node", "$env:LOCALAPPDATA\Programs\PortableGit\cmd")
   $env:Path = (@([System.Environment]::GetEnvironmentVariable("Path","Machine"), [System.Environment]::GetEnvironmentVariable("Path","User")) + $extra) -join ";"
 }
-# irm | iex では上の関数が利用者の PowerShell に残り、短い名前（Log/OK 等）が後の作業と衝突し得るため、返す前に消す
-$script:OnboardFunctions = @("Function:\Log", "Function:\Step", "Function:\OK", "Function:\NG", "Function:\Warn", "Function:\Fail", "Function:\Have", "Function:\LogLines", "Function:\Refresh-Path")
+# irm | iex では上の関数が利用者の PowerShell に残り、短い名前（Log/OK 等）が後の作業と衝突し得るため、
+# 返す前に消し、控えておいた利用者の元の定義を戻す
+$script:OnboardFunctions = @($script:OnboardFunctionNames | ForEach-Object { "Function:\" + $_ })
 
 if ($PROJECT_REPO -and -not $PROJECT_DIR) {
   $leaf = [System.IO.Path]::GetFileNameWithoutExtension($PROJECT_REPO)
@@ -145,9 +155,9 @@ if (-not $installer) {
 }
 
 $needTools = @("git","node","gh","claude")
-# full はインストーラが clasp/python/gcloud/uv まで入れる。ここで確かめないと、それらが入らず
-# インストーラが PARTIAL(2) を返しても、下の判定だけ見て PASS と表示してしまう
-if ($TOOLSET -ne "lite") { $needTools += @("clasp","python","gcloud","uv") }
+# full はインストーラが npm/clasp/python/gcloud/uv/uvx まで必須にする（install_all.ps1 の core と同じ集合）。
+# ここで確かめないと、それらが入らずインストーラが PARTIAL(2) を返しても PASS と表示してしまう
+if ($TOOLSET -ne "lite") { $needTools += @("npm","clasp","python","gcloud","uv","uvx") }
 foreach ($t in ($EXTRA_TOOLS -split '\s+')) {
   if ($t -eq "python")     { $needTools += "python" }
   if ($t -eq "playwright") { $needTools += "playwright" }
@@ -418,7 +428,7 @@ if ($Check) {
   Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
   $global:LASTEXITCODE = $rc
   $ErrorActionPreference = $script:PrevErrorActionPreference
-  if ($script:ViaIex) { Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue; return }
+  if ($script:ViaIex) { Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue; foreach ($k in @($script:SavedFunctions.Keys)) { Set-Item -Path ("Function:\" + $k) -Value $script:SavedFunctions[$k] }; return }
   exit $rc
 }
 
@@ -478,5 +488,5 @@ Log ""
 Log ("GSCALE_ONBOARD_RESULT: {0} profile={1} missing={2}" -f $result,$PROFILE_ID,(($script:Failed -join ",") -replace '^$','none'))
 $global:LASTEXITCODE = $rc
 $ErrorActionPreference = $script:PrevErrorActionPreference
-if ($script:ViaIex) { Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue; return }
+if ($script:ViaIex) { Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue; foreach ($k in @($script:SavedFunctions.Keys)) { Set-Item -Path ("Function:\" + $k) -Value $script:SavedFunctions[$k] }; return }
 exit $rc
