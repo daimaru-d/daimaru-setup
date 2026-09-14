@@ -1,4 +1,4 @@
-﻿# ！このファイルは GScale-jp/fde-setup (@4a459f8) から自動生成されています。
+﻿# ！このファイルは GScale-jp/fde-setup (@d12cadc) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 #Requires -Version 5.1
@@ -138,9 +138,14 @@ function Show-Summary {
   # 明示指定した追加ツールも「入っていて当然」の扱いにする（PARTIAL で気づけるように）
   if ($WithPython -and $core -notcontains 'python') { $core += 'python' }
   if ($WithPlaywright) { $core += 'playwright' }
+  # Python の部品（PyMuPDF/OpenCV 等）は Visual C++ ランタイムが無いと import が "DLL load failed" になる。
+  # python があるだけで PASS にしない（UserScope では管理者が要るため入れられず、ここで PARTIAL になる）
+  if ($core -contains 'python') { $core += 'vc-runtime' }
   $missing = @()
   foreach ($t in $core) {
-    $present = if ($t -eq 'python') { HasPython } else { Has $t }
+    $present = if ($t -eq 'python') { HasPython }
+               elseif ($t -eq 'vc-runtime') { (Test-Path "$env:SystemRoot\System32\msvcp140.dll") -and (Test-Path "$env:SystemRoot\System32\vcruntime140_1.dll") }
+               else { Has $t }
     if ($present) { Log "  OK  $t" } else { Log "  --  $t（未導入 / 新シェルで反映の場合あり）"; $missing += $t }
   }
   if (-not $Minimal) {

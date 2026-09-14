@@ -32,7 +32,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@4a459f8) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@d12cadc) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -137,6 +137,9 @@ if (-not $installer) {
 } else {
   # $args は PowerShell の自動変数なので使わない（上書きすると splat が壊れる）
   $instArgs = @()
+  # インストーラへ渡す WITH_* は、irm | iex だと利用者の窓に残り、同じ窓で別プロファイルを実行したとき
+  # 余計なツールまで入ってしまう。呼び出し後に元へ戻す
+  $prevWithFlags = @{ WITH_VSCODE = $env:WITH_VSCODE; WITH_PYTHON = $env:WITH_PYTHON; WITH_PLAYWRIGHT = $env:WITH_PLAYWRIGHT }
   if ($TOOLSET -eq "lite") { $instArgs += "-Minimal"; $env:WITH_VSCODE = "1" }
   # lite でも案件に要るものだけを足す（full にすると gcloud/clasp のDLで10分近く延びる）
   foreach ($t in ($EXTRA_TOOLS -split '\s+')) {
@@ -149,6 +152,7 @@ if (-not $installer) {
   if ($PROJECT_DIR)        { $instArgs += @("-TrustDir", $PROJECT_DIR) }
   & powershell -NoProfile -ExecutionPolicy Bypass -File $installer @instArgs
   $instRc = $LASTEXITCODE
+  foreach ($k in @($prevWithFlags.Keys)) { [Environment]::SetEnvironmentVariable($k, $prevWithFlags[$k], "Process") }
   # 合否は下のツール有無で判定する。終了コードは原因調査のために残す
   if ($instRc -ne 0) { Warn ("インストーラの終了コード: " + $instRc + "（下の確認で不足を判定します）") }
   Refresh-Path
@@ -164,6 +168,12 @@ foreach ($t in ($EXTRA_TOOLS -split '\s+')) {
 }
 foreach ($t in $needTools) {
   if (Have $t) { OK $t } else { Fail $t ($t + " が見つかりません") }
+}
+# Python の部品（PyMuPDF/OpenCV 等）は Visual C++ ランタイムが無いと import が "DLL load failed" になる。
+# python コマンドがあるだけで PASS にしない（管理者でない PC ではインストーラが入れられないことがある）
+if ($needTools -contains "python") {
+  if ((Test-Path "$env:SystemRoot\System32\msvcp140.dll") -and (Test-Path "$env:SystemRoot\System32\vcruntime140_1.dll")) { OK "Visual C++ ランタイム" }
+  else { Fail "vc-runtime" "Visual C++ ランタイムがありません（管理者で https://aka.ms/vs/17/release/vc_redist.x64.exe を実行してください）" }
 }
 
 # プロファイル指定の追加CLI（例: Gemini CLI / Codex CLI）
