@@ -26,8 +26,10 @@ param(
 )
 
 # irm | iex では呼び出し元のスコープで動く。ここから作る・上書きする変数を、返す前に元へ戻すための控え
-$script:VarSnapshot = @{}
-foreach ($__v in @(Get-Variable)) { $script:VarSnapshot[$__v.Name] = $__v.Value }
+# 控えの入れ物は呼び出し元と衝突しない名前にし、控え自身は「元からあった変数」から外す（外さないと戻す処理が消さずに残す）
+$script:__GScaleOnboardSnapshot = @{}
+foreach ($__v in @(Get-Variable)) { $script:__GScaleOnboardSnapshot[$__v.Name] = $__v.Value }
+[void]$script:__GScaleOnboardSnapshot.Remove('__GScaleOnboardSnapshot')
 
 # irm | iex では呼び出し元の PowerShell のスコープで動くため、変えた設定は戻ってから返す
 $script:PrevErrorActionPreference = $ErrorActionPreference
@@ -36,7 +38,7 @@ $ErrorActionPreference = "Continue"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 # >>> PROFILE >>>
-# ！このファイルは GScale-jp/fde-setup (@d9c8324) から自動生成されています。
+# ！このファイルは GScale-jp/fde-setup (@35b9e95) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 $PROFILE_ID = if ($env:PROFILE_ID) { $env:PROFILE_ID } else { "daimaru-keiri" }
@@ -105,15 +107,19 @@ $script:OnboardFunctions = @($script:OnboardFunctionNames | ForEach-Object { "Fu
 $script:RestoreCaller = {
   Remove-Item -Path $script:OnboardFunctions -ErrorAction SilentlyContinue
   foreach ($k in @($script:SavedFunctions.Keys)) { Set-Item -Path ("Function:\" + $k) -Value $script:SavedFunctions[$k] }
-  $snap = $script:VarSnapshot
-  $keep = @('LASTEXITCODE', 'ErrorActionPreference', 'snap', 'keep', 'var', '?', '^', '$', '_', 'args', 'input', 'PSItem', 'Error', 'PWD', 'Host', 'MyInvocation', 'PSBoundParameters', 'PSCommandPath', 'PSScriptRoot', 'Matches', 'foreach', 'switch', 'this', 'StackTrace', 'ExecutionContext')
+  $snap = $script:__GScaleOnboardSnapshot
+  $keep = @('LASTEXITCODE', 'ErrorActionPreference', 'snap', 'keep', 'var', 'opt', '?', '^', '$', '_', 'args', 'input', 'PSItem', 'Error', 'PWD', 'Host', 'MyInvocation', 'PSBoundParameters', 'PSCommandPath', 'PSScriptRoot', 'Matches', 'foreach', 'switch', 'this', 'StackTrace', 'ExecutionContext')
   foreach ($var in @(Get-Variable)) {
-    if ($keep -contains $var.Name) { continue }
-    if ($var.Options -band ([System.Management.Automation.ScopedItemOptions]::ReadOnly -bor [System.Management.Automation.ScopedItemOptions]::Constant)) { continue }
-    if ($snap.ContainsKey($var.Name)) { Set-Variable -Name $var.Name -Value $snap[$var.Name] -ErrorAction SilentlyContinue }
-    else { Remove-Variable -Name $var.Name -Force -ErrorAction SilentlyContinue }
+    # 1 つの変数で失敗しても後始末全体を止めない（読み取り専用・特殊な自動変数は触らない）
+    try {
+      if ($keep -contains $var.Name) { continue }
+      $opt = [string]$var.Options
+      if ($opt -match 'ReadOnly|Constant') { continue }
+      if ($snap.ContainsKey($var.Name)) { Set-Variable -Name $var.Name -Value $snap[$var.Name] -ErrorAction SilentlyContinue }
+      else { Remove-Variable -Name $var.Name -Force -ErrorAction SilentlyContinue }
+    } catch { }
   }
-  Remove-Variable -Name snap, keep, var -ErrorAction SilentlyContinue
+  Remove-Variable -Name snap, keep, var, opt -ErrorAction SilentlyContinue
 }
 
 if ($PROJECT_REPO -and -not $PROJECT_DIR) {
