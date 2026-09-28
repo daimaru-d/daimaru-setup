@@ -1,4 +1,4 @@
-﻿# ！このファイルは GScale-jp/fde-setup (@d1a08ba) から自動生成されています。
+﻿# ！このファイルは GScale-jp/fde-setup (@2af9fec) から自動生成されています。
 # ！ここを直接編集しないでください。編集は fde-setup 側 → vendor_onboard.sh で再生成。
 # ！profile: daimaru-keiri
 #Requires -Version 5.1
@@ -373,6 +373,10 @@ else {
   Refresh-Path
   if (Has claude) { Log "  OK claude 導入" } else { Log "  X claude 未導入（新シェルで反映の場合あり）" }
 }
+# 公式インストーラは claude.exe を %USERPROFILE%\.local\bin に置くが、ユーザー PATH には登録しない。
+# Refresh-Path はこのセッションにしか足さないため、ここでユーザー PATH に登録する（新しい PowerShell でも claude が見つかるように）。
+# 既に claude が見えていた場合（以前の導入でセッションだけ補われていた PC）も対象。Add-UserPath は登録済みなら何もしない。
+if (Test-Path "$HOME\.local\bin\claude.exe") { Add-UserPath "$HOME\.local\bin" }
 
 # ---- 8. git（管理者=Git for Windows / UserScope=PortableGit）----
 if (-not $SkipGit) {
