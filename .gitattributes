@@ -1,0 +1,5 @@
+# Windows で clone しても bash のスクリプトが CRLF にならないようにする
+# （CRLF だと Git Bash が `set -o pipefail` の行などで止まる）
+*.sh text eol=lf
+tests/stubs/op text eol=lf
+*.ps1 text eol=crlf

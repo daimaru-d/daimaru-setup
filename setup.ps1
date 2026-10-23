@@ -36,14 +36,14 @@ function Invoke-Cli {
 }
 
 Write-Host ""
-Write-Host "==> 1/4 必要なソフトを入れています (Git / Node.js / GitHub CLI)" -ForegroundColor Cyan
+Write-Host "==> 1/6 必要なソフトを入れています (Git / Node.js / GitHub CLI)" -ForegroundColor Cyan
 winget install --id Git.Git           -e --accept-package-agreements --accept-source-agreements
 winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
 winget install --id GitHub.cli        -e --accept-package-agreements --accept-source-agreements
 Refresh-Path
 
 Write-Host ""
-Write-Host "==> 2/4 Claude Code を入れています" -ForegroundColor Cyan
+Write-Host "==> 2/6 Claude Code を入れています" -ForegroundColor Cyan
 # npm.ps1 ではなく npm.cmd を直接呼ぶ（スクリプト実行が無効でも動く）
 Invoke-Cli npm @("install","-g","@anthropic-ai/claude-code")
 Refresh-Path
@@ -52,7 +52,7 @@ if (-not (Get-Command claude.cmd,claude.exe,claude -ErrorAction SilentlyContinue
 }
 
 Write-Host ""
-Write-Host "==> 3/4 GitHub にログインします。ブラウザが開いたら、許可された GitHub アカウントでログインしてください" -ForegroundColor Cyan
+Write-Host "==> 3/6 GitHub にログインします。ブラウザが開いたら、許可された GitHub アカウントでログインしてください" -ForegroundColor Cyan
 # 未ログインだと gh auth status は stderr に出力し終了コード非0（EAP=Continue なので止まらない）
 gh auth status 2>$null
 if ($LASTEXITCODE -ne 0) { gh auth login --hostname github.com --git-protocol https --web }
@@ -73,7 +73,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "==> 4/5 道具箱（daimaru-skills）を取り込んでいます" -ForegroundColor Cyan
+Write-Host "==> 4/6 道具箱（daimaru-skills）を取り込んでいます" -ForegroundColor Cyan
 Set-Location $HOME
 if (-not (Test-Path "$HOME\daimaru-skills")) {
   git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git
@@ -91,7 +91,7 @@ if (-not (Test-Path "$HOME\daimaru-skills\.git")) {
 Set-Location "$HOME\daimaru-skills"
 
 Write-Host ""
-Write-Host "==> 5/5 BIダッシュボード用の道具とログイン" -ForegroundColor Cyan
+Write-Host "==> 5/6 BIダッシュボード用の道具とログイン" -ForegroundColor Cyan
 # gcloud / clasp / cloud-sql-proxy
 if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
   winget install --id Google.CloudSDK -e --accept-package-agreements --accept-source-agreements
@@ -116,6 +116,16 @@ if (Get-Command clasp -ErrorAction SilentlyContinue) {
   if (-not (Test-Path "$HOME\.clasprc.json")) { clasp login 2>$null }
 }
 Write-Host "  ! 新規GAS作成には各自Googleで Apps Script API 有効化が必要: https://script.google.com/home/usersettings" -ForegroundColor Yellow
+
+Write-Host ""
+Write-Host "==> 6/6 パスワード金庫（1Password）を Claude Code で使えるようにしています" -ForegroundColor Cyan
+# 中身は scripts/op/setup.ps1（単独でも実行できる）。失敗しても全体は止めない
+try {
+  irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/setup.ps1 | iex
+} catch {
+  Write-Host "  ! パスワード金庫の準備に失敗しました（後で: irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/setup.ps1 | iex）" -ForegroundColor Yellow
+}
+Set-Location "$HOME\daimaru-skills"
 
 Write-Host ""
 Write-Host "==> 準備ができました。Claude Code を起動します（安全バイパス：プロンプト最小・破壊操作はブロック）" -ForegroundColor Green

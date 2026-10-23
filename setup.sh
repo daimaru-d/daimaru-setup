@@ -4,7 +4,7 @@
 # 使い方: ターミナルに次の1行を貼って Enter するだけ
 #   curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh | bash
 # やること: Claude Code 導入 → 道具(git/node/gh/gcloud/clasp/cloud-sql-proxy) → 取り込み(npm ci)
-#           → ログイン(gh/gcloud/ADC/clasp) → 安全バイパスで Claude 起動
+#           → ログイン(gh/gcloud/ADC/clasp) → パスワード金庫(1Password) → 安全バイパスで Claude 起動
 # 思想: 1工程が失敗しても止めない。何が出来て何が要対応かを最後にまとめる（非エンジニア向け）。
 # =============================================================================
 set -uo pipefail
@@ -30,7 +30,7 @@ fi
 # winget でソフトを入れた直後のように、~/.local/bin 等を PATH に通す
 export PATH="$HOME/.local/bin:$HOME/google-cloud-sdk/bin:$PATH"
 
-say "==> 0/6 環境 (OS=$OS, パッケージ管理=$PM)"
+say "==> 0/7 環境 (OS=$OS, パッケージ管理=$PM)"
 if [ "$OS" = "mac" ] && [ -z "$PM" ]; then
   warn "Homebrew が無いため一部の自動導入ができません。https://brew.sh で入れると以降が楽になります。"
 fi
@@ -46,8 +46,8 @@ pm_install(){ # 引数: brewパッケージ名 aptパッケージ名 [--cask]
   esac
 }
 
-# --- 1/6 Claude Code 本体 ---
-say "==> 1/6 Claude Code を導入"
+# --- 1/7 Claude Code 本体 ---
+say "==> 1/7 Claude Code を導入"
 if have claude; then ok "Claude Code ($(claude --version 2>/dev/null | head -1))"
 else
   curl -fsSL https://claude.ai/install.sh | bash || warn "Claude Code 自動導入に失敗"
@@ -55,8 +55,8 @@ else
   have claude && ok "Claude Code 導入完了" || { err "Claude Code が見つかりません"; TODO+=("Claude Code を手動導入: curl -fsSL https://claude.ai/install.sh | bash"); }
 fi
 
-# --- 2/6 開発ツール ---
-say "==> 2/6 開発ツール (git / node / gh / gcloud / clasp / cloud-sql-proxy)"
+# --- 2/7 開発ツール ---
+say "==> 2/7 開発ツール (git / node / gh / gcloud / clasp / cloud-sql-proxy)"
 have git  || pm_install git  git  || TODO+=("git を導入")
 have node || pm_install node "nodejs npm" || TODO+=("Node.js を導入")
 have gh   || pm_install gh   gh   || TODO+=("gh(GitHub CLI) を導入")
@@ -78,8 +78,8 @@ if have node; then
     warn "Node.js が古い($(node -v 2>/dev/null))。18+ が必要"; TODO+=("Node 18+ を導入（NodeSource: https://github.com/nodesource/distributions / brew install node）"); fi
 fi
 
-# --- 3/6 GitHub ログイン ---
-say "==> 3/6 GitHub にログイン（ブラウザが開いたら、許可されたアカウントで）"
+# --- 3/7 GitHub ログイン ---
+say "==> 3/7 GitHub にログイン（ブラウザが開いたら、許可されたアカウントで）"
 if have gh; then
   gh auth status >/dev/null 2>&1 || gh auth login --hostname github.com --git-protocol https --web
   gh auth setup-git >/dev/null 2>&1 || true
@@ -94,8 +94,8 @@ if have gh; then
   fi
 fi
 
-# --- 4/6 道具箱を取り込む ---
-say "==> 4/6 道具箱（daimaru-skills）を取り込み"
+# --- 4/7 道具箱を取り込む ---
+say "==> 4/7 道具箱（daimaru-skills）を取り込み"
 cd "$HOME"
 if [ -d "$HOME/daimaru-skills/.git" ]; then
   ( cd "$HOME/daimaru-skills" && git pull && git submodule sync --recursive && git submodule update --init --recursive ) || warn "更新に一部失敗"
@@ -110,8 +110,8 @@ if [ -d "$HUB/repos/eigyo-talk-analyzer" ]; then
   ( cd "$HUB/repos/eigyo-talk-analyzer" && npm ci >/dev/null 2>&1 ) && ok "DB接続ライブラリ(pg) 準備OK" || warn "npm ci に失敗(後で $HUB/repos/eigyo-talk-analyzer で npm ci)"
 fi
 
-# --- 5/6 BI用ログイン ---
-say "==> 5/6 BI用ログイン（ブラウザが開きます）"
+# --- 5/7 BI用ログイン ---
+say "==> 5/7 BI用ログイン（ブラウザが開きます）"
 if have gcloud; then
   gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | grep -q . || gcloud auth login
   gcloud auth application-default print-access-token >/dev/null 2>&1 || gcloud auth application-default login   # ★ADC(proxyが使う)
@@ -120,12 +120,22 @@ fi
 if have clasp; then [ -f "$HOME/.clasprc.json" ] || clasp login || true; fi
 warn "新規GAS作成には各自Googleで Apps Script API 有効化が必要: https://script.google.com/home/usersettings"
 
-# --- 6/6 まとめ & 起動 ---
+# --- 6/7 パスワード金庫（1Password） ---
+say "==> 6/7 パスワード金庫（1Password）を Claude Code で使えるようにする"
+# 中身は scripts/op/setup.sh（単独でも実行できる）。失敗しても全体は止めない
+if curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/setup.sh | bash; then
+  ok "パスワード金庫の準備（詳細は上の表示。確認: bash ~/.claude/skills/op-secrets/scripts/op-doctor.sh）"
+else
+  warn "パスワード金庫の準備に失敗"
+  TODO+=("パスワード金庫: curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/setup.sh | bash")
+fi
+
+# --- 7/7 まとめ & 起動 ---
 echo ""
 if [ ${#TODO[@]} -eq 0 ]; then
-  say "==> 6/6 準備OK！ 安全バイパスで Claude Code を起動します"
+  say "==> 7/7 準備OK！ 安全バイパスで Claude Code を起動します"
 else
-  say "==> 6/6 一部 要対応があります（下記）。先に解消するか、Claude起動後に bi-doctor で確認してください"
+  say "==> 7/7 一部 要対応があります（下記）。先に解消するか、Claude起動後に bi-doctor で確認してください"
   for t in "${TODO[@]}"; do warn "$t"; done
 fi
 echo ""

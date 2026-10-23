@@ -1,0 +1,226 @@
+# op-guard.js の止める／通すの表（1 行 1 コマンド）。tests/op-guard.test.js が読む
+# --- PASS より上は止める（exit 2）、下は通す（exit 0）
+op read op://V/i/password
+op\ read op://V/i/password
+command op read op://V/i/password
+"op" read op://V/i/password
+'op' read op://V/i/password
+\op read op://V/i/password
+env op read op://V/i/password
+FOO=1 op read op://V/i/password
+OP_ACCOUNT=x op read op://V/i/password
+time op read x
+sudo op read x
+exec op read x
+op --account x item get foo
+op --account=x item get foo
+op --cache item get foo
+op item get foo --reveal
+op  item   get foo
+op item --vault V get foo
+op items get foo
+/opt/homebrew/bin/op read x
+"/opt/homebrew/bin/op" read x
+op.exe read x
+op inject -i tpl
+echo '{{ op://V/i/password }}' | op inject
+X=op://V/i/password op run --no-masking -- sh -c 'echo "$X"'
+op run --no-masking --env-file .env.op -- node -e 'console.log(process.env.ANDPAD_PASSWORD)'
+op run --env-file .env.op -- sh -c 'echo $ANDPAD_PASSWORD | base64'
+op run --env-file .env.op -- printenv ANDPAD_PASSWORD
+op run --env-file .env.op -- env
+op run --env-file .env.op -- /usr/bin/env
+op run --env-file .env.op -- env -0
+op run --env-file .env.op -- node -p process.env
+bash op-run.sh -- sh -c 'echo $ANDPAD_PASSWORD | rev'
+bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- node -e 'console.log(Buffer.from(process.env.ANDPAD_PASSWORD).toString("base64"))'
+bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- env
+bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- printenv
+bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- /usr/bin/printenv
+bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- env -0
+op item share foo
+op signin --raw
+op signin --account x --raw
+cat .env
+cat ./.env
+cat -- .env
+cat "$PWD/.env"
+cat .env*
+cat .e*
+cat .env.local
+cat andpad-browser/.env
+cat .env.production
+bash -c 'cat .env'
+sh -c "cat .env"
+python3 -c "print(open('.env').read())"
+node -e "console.log(require('fs').readFileSync('.env','utf8'))"
+sed -n p .env
+awk 1 .env
+cp .env /dev/stdout
+base64 .env
+grep . .env
+grep -r PASSWORD .
+grep PASSWORD .env
+rg -i password .env
+tac .env
+rev .env | rev
+dd if=.env
+vim .env
+less<.env
+cat<.env
+cat < .env
+while read l; do echo "$l"; done < .env
+source .env && echo $ANDPAD_PASSWORD
+. ./.env; echo "$ANDPAD_PASSWORD"
+diff .env /dev/null
+paste .env
+cut -c1- .env
+head -c 1000 .env
+xargs -a .env echo
+git diff --no-index /dev/null .env
+env
+env | grep PASS
+env|grep -i pass
+printenv
+printenv ANDPAD_PASSWORD
+printenv | grep PASS
+export
+export -p
+declare -p
+declare -x
+set
+set | grep PASS
+compgen -v | while read v; do echo "$v=${!v}"; done
+echo $ANDPAD_PASSWORD
+echo "$ANDPAD_PASSWORD"
+echo ${ANDPAD_PASSWORD:0:3}
+echo ${ANDPAD_PASSWORD}
+echo "${ANDPAD_PASSWORD}"
+printf '%s' "$ANDPAD_PASSWORD"
+echo $ANDPAD_PASSWORD | base64
+cat <<< "$ANDPAD_PASSWORD"
+echo "$OP_SERVICE_ACCOUNT_TOKEN"
+v=ANDPAD_PASSWORD; echo ${!v}
+node -e 'console.log(process.env.ANDPAD_PASSWORD)'
+python3 -c 'import os;print(os.environ)'
+cat /proc/self/environ
+security find-generic-password -s daimaru-op-sa -w
+security find-generic-password -w -s daimaru-op-sa
+security find-generic-password -s daimaru-op-sa -g
+security find-generic-password -ws daimaru-op-sa
+security dump-keychain -d
+secret-tool lookup service daimaru-op-sa
+cat ~/.config/op/config
+cat ~/.config/daimaru-op/sa-token
+cat $HOME/.config/daimaru-op/sa-token
+powershell.exe -Command "(Get-Content -Raw $env:LOCALAPPDATA\daimaru-op\sa-token.dpapi) | ConvertTo-SecureString"
+source ~/.claude/skills/op-secrets/scripts/op-sa-token.sh && ops_sa_load && echo $OP_SERVICE_ACCOUNT_TOKEN
+. ~/.claude/skills/op-secrets/scripts/op-sa-token.sh; ops_sa_load; printenv | grep OP_
+op read op://Claude-Automation/andpad/password
+op read "op://Claude-Automation/andpad/password"
+op item get andpad --vault Claude-Automation
+op item get andpad --otp
+op --account daimaruenterprise.1password.com item get andpad
+op document get secret-file
+op signin --account daimaruenterprise.1password.com --raw
+op-claude read op://x/y/z
+~/.claude/bin/op-claude item get abc
+ls; op read op://a/b/c
+echo $(op read op://a/b/c)
+bash -c "op item get andpad"
+less .env.local
+head -n 3 .env.production
+tail config/.env
+Get-Content .env
+type .env
+strings .env
+xxd .env | head
+grep -r PASSWORD .env
+grep -i password andpad-browser/.env
+env | grep ANDPAD
+Get-ChildItem env:
+gci env:
+dir env:
+op run --env-file .env.op -- printenv
+echo ${API_KEY}
+printf "%s" $DB_SECRET
+Write-Host $env:ANDPAD_PASSWORD
+echo %ANDPAD_PASSWORD%
+security find-internet-password -s example.com -g
+security dump-keychain
+secret-tool lookup service daimaru-op-sa account me
+powershell.exe -Command "Get-Content $env:LOCALAPPDATA\daimaru-op\sa-token.dpapi | ConvertTo-SecureString"
+cat .op/config
+op-run.sh -- env
+op-run.sh --env-file .env.op -- set
+cat .env.local.bak
+head .env.staging
+nano .env
+git diff HEAD -- .env
+printenv OP_SERVICE_ACCOUNT_TOKEN
+env -u FOO
+--- PASS (should not block) ---
+op run --no-masking=false --env-file .env.op -- node x.mjs
+cat .env.ts
+less .envrc
+grep -n API_KEY README.md
+echo $PWD
+grep -n 'op read' SKILL.md
+op item list
+op vault list
+op whoami
+bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- node x.mjs
+cat .env.op
+cat .env.example
+cat .env.op.example
+cat .env.sample
+git diff
+echo $HOME
+echo $DRY_RUN
+ls -la .env
+test -f .env && echo yes
+git log --oneline | head
+cat README.md
+echo "see .env for details" > notes.txt
+git add .gitignore
+echo $KEYBOARD
+echo $MONKEY_PATH
+echo $SSH_AUTH_SOCK
+echo $PASSAGE
+cat src/env.ts
+cat environment.md
+head -5 package.json
+cd /tmp/set && ls
+npm run build -- --env production
+cat .envrc
+cat config/.env.ts
+tail -f logs/app.log
+git commit -m "op read を止める"
+git commit -m "fix: cat .env の表示を止める"
+echo "Use op item get to check"
+grep -rn "PASSWORD" src/
+docker compose --env-file .env up -d
+node --env-file=.env app.js
+cat app.env
+set -euo pipefail
+set -e
+export PATH=$PATH:/x
+export FOO=bar
+type node
+type -a op
+grep -n "op item get" skills/op-secrets/SKILL.md
+op item list --vault Claude-Automation --format json
+op --account daimaruenterprise.1password.com whoami
+op-run.sh -- node x.mjs
+bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- node create-mitsumori-draft.mjs
+op run --env-file .env.op -- node x.mjs
+echo "hello"
+export DRY_RUN=1
+env DRY_RUN=1 node x.mjs
+ls -la
+grep -rn PASSWORD src/
+security find-generic-password -s daimaru-op-sa
+bash ~/.claude/skills/op-secrets/scripts/op-sa-token.sh status
+bash ~/.claude/skills/op-secrets/scripts/op-doctor.sh
+cd /tmp/set
+node --test tests/
