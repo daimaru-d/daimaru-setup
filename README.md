@@ -24,6 +24,7 @@
 | 3 | GitHub にブラウザでログイン |
 | 4 | 業務ハブ `daimaru-skills` を取り込み（`npm ci` 含む） |
 | 5 | BI用ログイン: gcloud / **ADC(`application-default`)** / clasp → 安全バイパスで Claude 起動 |
+| 6 | **パスワード金庫（1Password）**: 1Password CLI を導入し、Claude Code にスキル `op-secrets`（見張りつき）を入れる |
 
 > `cloud-sql-proxy` は `gcloud components install cloud-sql-proxy` で導入（手動DL不要・自動でPATH）。
 > ブラウザ認証（GitHub / Google / ADC / clasp）は途中で開くので、各自ログインしてください。
@@ -59,3 +60,22 @@
 - `daimaru-keiri-automation` は非公開リポジトリです。取り込みに失敗する場合は GitHub のユーザー名を GScale までお知らせください（招待します）。
 - つまずいたら `%USERPROFILE%\gscale-onboard.log`（Mac は `~/gscale-onboard.log`）を送ってください。
 - `scripts/keiri/` のファイルは GScale-jp/fde-setup から自動生成されています。直接編集しないでください。
+
+## パスワードを 1Password で管理する（op-secrets）
+
+自動化に使う ID・パスワードを、平文の `.env` ではなく 1Password（`daimaruenterprise.1password.com` の保管庫 `Claude-Automation`）に置き、
+Claude Code が**値を見ずに**使えるようにするスキルです。上の1行（本体のセットアップ）に含まれていますが、既に導入済みの人は次の1行だけで入れられます。
+
+| OS | 開くもの | 貼る1行 |
+|:--|:--|:--|
+| **macOS / Linux** | ターミナル | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/setup.sh \| bash` |
+| **Windows** | Windows PowerShell | `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/setup.ps1 \| iex` |
+
+- 1Password アプリ側で、サインインと「設定 → 開発者 → 1Password CLI と連携」を ON にしてください（最初の1回だけ）。
+- 診断: `bash ~/.claude/skills/op-secrets/scripts/op-doctor.sh`（最後の行が `OP_DOCTOR: PASS` なら準備完了）
+- 動かし方: `.env.op` に「住所」（`op://Claude-Automation/項目/欄`）だけを書き、`bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- <コマンド>` で動かします。
+  既存の `.env` は `op-env-migrate.sh <.envの場所>` で移せます。詳しくは [skills/op-secrets/SKILL.md](./skills/op-secrets/SKILL.md) と [運用ガイド](./docs/op-secrets_運用ガイド.md)。
+- Claude Code の設定（`~/.claude/settings.json`）に、値を画面に出すコマンド（1Password の値の表示や `.env` の表示など）を止める見張りが入ります。
+- Mac で無人実行のトークンをキーチェーンに保管するとき（`op-sa-token.sh set`）だけは、macOS の `security` コマンドの仕様上、トークンが一瞬だけそのコマンドの引数になります（画面やログには残りません）。
+
+開発者向けのテスト: `bash tests/scripts.test.sh && node --test tests/*.test.js`

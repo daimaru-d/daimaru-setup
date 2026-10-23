@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# テスト用の 1Password CLI（op）のスタブ。本物の op・金庫には触らない。
+# 呼ばれた引数を $OP_STUB_LOG に 1 行ずつ記録し、決まった応答を返す。
+#   OP_STUB_VERSION（既定 2.30.0）/ OP_STUB_WHOAMI_RC / OP_STUB_VAULT_RC / OP_STUB_ITEM_EXISTS=1
+#   item create / edit の --template の中身は $OP_STUB_DIR/template-<n>.json に写す（届いたかの確認用）
+log="${OP_STUB_LOG:-/dev/null}"
+sa=0; [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && sa=1
+printf 'SA=%s ARGS=%s\n' "$sa" "$*" >> "$log"
+
+args=("$@")
+while [ ${#args[@]} -gt 0 ]; do
+  case "${args[0]}" in
+    --account) args=("${args[@]:2}");;
+    --*) args=("${args[@]:1}");;
+    *) break;;
+  esac
+done
+sub="${args[0]:-}"; sub2="${args[1]:-}"
+
+template_of(){
+  local i=0 a
+  for a in "$@"; do
+    case "$a" in --template=*) echo "${a#--template=}"; return;; esac
+    if [ "$a" = --template ]; then echo "${args[$((i + 1))]}"; return; fi
+    i=$((i + 1))
+  done
+}
+
+case "$sub" in
+  --version) echo "${OP_STUB_VERSION:-2.30.0}"; exit 0;;
+esac
+case "$1" in
+  --version) echo "${OP_STUB_VERSION:-2.30.0}"; exit 0;;
+esac
+
+case "$sub $sub2" in
+  "whoami "*) exit "${OP_STUB_WHOAMI_RC:-0}";;
+  "account list") printf 'URL                                EMAIL                 USER ID\ndaimaruenterprise.1password.com    someone@example.com   XXXXXXXX\n'; exit 0;;
+  "vault get") [ "${OP_STUB_VAULT_RC:-0}" = 0 ] || exit "${OP_STUB_VAULT_RC}"; echo '{"name":"Claude-Automation"}'; exit 0;;
+  "item get")
+    if [ "${OP_STUB_ITEM_EXISTS:-0}" = 1 ]; then
+      echo '{"id":"stubid","title":"stub","category":"LOGIN","fields":[{"id":"notesPlain","type":"STRING","label":"notesPlain","value":"keep-me"}]}'
+      exit 0
+    fi
+    echo '[ERROR] item not found' >&2; exit 1;;
+  "item create"|"item edit")
+    t="$(template_of "${args[@]}")"
+    n=$(ls "${OP_STUB_DIR:-/tmp}"/template-*.json 2>/dev/null | wc -l | tr -d ' ')
+    [ -n "$t" ] && cp "$t" "${OP_STUB_DIR:-/tmp}/template-$((n + 1)).json"
+    echo '{"id":"stubid","fields":[{"value":"STUB-CREATE-OUTPUT"}]}'
+    exit 0;;
+  "run "*) exit 0;;
+esac
+echo "op stub: unknown: $*" >&2
+exit 9
