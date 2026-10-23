@@ -6,7 +6,8 @@
 # - 項目名は英小文字・数字・ハイフンだけ（日本語は秘密参照で使えないため）
 # - パスワードは引数で受け取らない。表示されない入力欄で受けるか、--generate で自動で作る。
 #   空のまま Enter すると、パスワード欄が空の項目を作る（あとで 1Password アプリで入れる）
-# - 値は 0600 の一時ファイル（--template）で op に渡す。引数に載せないのはプロセス一覧に見えるため
+#   端末があれば端末から読む。Claude Code の Bash から呼ばれたとき（端末なし）は空のまま作る
+# - 値はパイプ（op item create の標準入力 -）で op に渡す。引数・一時ファイルには載せない
 # =============================================================================
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,61 +56,56 @@ if ! ops_find_op; then
   exit 2
 fi
 
-# 既にあれば作らない（パスワードの変更は 1Password アプリで）
-if ops_op item get "$name" --vault "$vault" --format json >/dev/null 2>&1; then
-  ok "項目「${name}」は保管庫「${vault}」に既にあります。パスワードを変えるなら 1Password アプリで変えてください"
-  exit 0
-fi
+# 既にあれば作らない（パスワードの変更は 1Password アプリで）。同じ名前が複数あれば止める
+state="$(ops_item_state "$name" "$vault")"
+case "$state" in
+  exists)
+    ok "項目「${name}」は保管庫「${vault}」に既にあります。パスワードを変えるなら 1Password アプリで変えてください"
+    exit 0;;
+  duplicate)
+    err "保管庫「${vault}」に「${name}」という名前の項目が複数あります。1Password アプリで 1 つにまとめるか名前を変えてください"
+    ops_show_duplicates "$name" "$vault"
+    exit 2;;
+  error)
+    err "1Password に問い合わせできませんでした（サインインと保管庫を op-doctor.sh で確認してください）"
+    exit 2;;
+esac
 
 pw=""
 if [ "$gen" = 0 ]; then
-  IFS= read -r -s -p "パスワード（表示されません。空のまま Enter で、あとから 1Password アプリで入れる）: " pw || true
-  printf '\n' >&2
-  pw="${pw%$'\r'}"
+  ops_read_secret pw "パスワード（表示されません。空のまま Enter で、あとから 1Password アプリで入れる）: "
 fi
 otp=""
 if [ "$totp" = 1 ]; then
-  IFS= read -r -s -p "2段階認証の設定キー（otpauth://... か英数字。表示されません。空ならアプリで後から）: " otp || true
-  printf '\n' >&2
-  otp="${otp%$'\r'}"
+  ops_read_secret otp "2段階認証の設定キー（otpauth://... か英数字。表示されません。空ならアプリで後から）: "
 fi
 
 pw_empty=0
 if [ "$gen" = 0 ] && [ -z "$pw" ]; then pw_empty=1; fi
 
-tmpd="$(mktemp -d "${TMPDIR:-/tmp}/op-item-add.XXXXXX")"
-chmod 700 "$tmpd"
-# 一時ファイルは中身を空にしてから消す
-cleanup(){
-  local f
-  if [ -n "${tmpd:-}" ] && [ -d "$tmpd" ]; then
-    for f in "$tmpd"/*; do if [ -f "$f" ]; then : > "$f"; fi; done
-    rm -rf "$tmpd"
-  fi
-}
-trap cleanup EXIT INT TERM
-
-# 値は標準入力（printf は bash の内蔵コマンドなのでプロセス一覧に出ない）で部品に渡す
-{
+# 値は標準入力（printf は bash の内蔵コマンドなのでプロセス一覧に出ない）で部品に渡し、
+# できたテンプレートはこのスクリプトの変数にだけ持つ
+tmpl="$({
   printf '%s\0' "$name" "$url" "$user" "$pw" "$gen" "$otp"
   for f in ${fields[@]+"${fields[@]}"}; do
     fv=""
-    IFS= read -r -s -p "「${f}」の値（表示されません）: " fv || true
-    printf '\n' >&2
-    printf '%s\0' "$f" "${fv%$'\r'}"
+    ops_read_secret fv "「${f}」の値（表示されません）: "
+    printf '%s\0' "$f" "$fv"
     fv=""
   done
-} | node "$HERE/op-template.js" login --out "$tmpd/item.json"
+} | node "$HERE/op-template.js" login)"
 otp_given=""; [ -n "$otp" ] && otp_given=1
 pw=""; otp=""
 
 gen_args=()
 [ "$gen" = 1 ] && gen_args=("--generate-password=20,letters,digits,symbols")
 # op item create の出力には項目の中身が含まれるので表示しない（エラーだけ出す）
-if ! ops_op item create --vault "$vault" --template "$tmpd/item.json" ${gen_args[@]+"${gen_args[@]}"} --format json >/dev/null; then
+if ! printf '%s' "$tmpl" | ops_op item create --vault "$vault" ${gen_args[@]+"${gen_args[@]}"} --format json - >/dev/null; then
+  tmpl=""
   err "項目を作れませんでした（保管庫「${vault}」が見えるか、op-doctor.sh で確認してください）"
   exit 2
 fi
+tmpl=""
 ok "1Password の保管庫「${vault}」に項目「${name}」を作りました"
 if [ "$pw_empty" = 1 ]; then warn "パスワード欄は空です。1Password アプリで項目「${name}」を開いて入れてください"; fi
 if [ "$totp" = 1 ] && [ -z "$otp_given" ]; then warn "2段階認証の設定キーは未登録です。1Password アプリで項目「${name}」に「ワンタイムパスワード」を足してください"; fi

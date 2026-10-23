@@ -76,6 +76,6 @@ Claude Code が**値を見ずに**使えるようにするスキルです。上�
 - 動かし方: `.env.op` に「住所」（`op://Claude-Automation/項目/欄`）だけを書き、`bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- <コマンド>` で動かします。
   既存の `.env` は `op-env-migrate.sh <.envの場所>` で移せます。詳しくは [skills/op-secrets/SKILL.md](./skills/op-secrets/SKILL.md) と [運用ガイド](./docs/op-secrets_運用ガイド.md)。
 - Claude Code の設定（`~/.claude/settings.json`）に、値を画面に出すコマンド（1Password の値の表示や `.env` の表示など）を止める見張りが入ります。
-- Mac で無人実行のトークンをキーチェーンに保管するとき（`op-sa-token.sh set`）だけは、macOS の `security` コマンドの仕様上、トークンが一瞬だけそのコマンドの引数になります（画面やログには残りません）。
+- 無人実行のトークン（1Password のサービスアカウント）は、管理者が対象の PC で入れます: Windows は PowerShell で `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.ps1 | iex`、Mac はターミナルで `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.sh | bash`（トークンは表示されません）。
 
 開発者向けのテスト: `bash tests/scripts.test.sh && node --test tests/*.test.js`

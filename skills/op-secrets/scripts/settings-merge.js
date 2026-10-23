@@ -2,8 +2,10 @@
 // =============================================================================
 // settings-merge.js — Claude Code の設定（~/.claude/settings.json）に、op-secrets の見張り（フック）と
 //                     禁止リスト（deny）を足す。何度実行しても同じ結果になる（冪等）
-//   node settings-merge.js [--check] [--settings PATH]
+//   node settings-merge.js [--check] [--settings PATH] [--skill-dir DIR]
 //   --check: 入っていれば終了コード 0、足りなければ何が無いかを出して 2
+//   --skill-dir: スキルを実際に置いた場所（install.sh が渡す）。省略時は ~/.claude/skills/op-secrets
+// settings.json がシンボリックリンクでも、リンクを壊さずに実体へ書く。
 // 書き込む前に settings.json.bak-YYYYMMDDHHMMSS を 1 つ作る。JSON が壊れていたら触らずに 2 で終わる。
 // 既存のキー・並び・ほかの設定はそのまま残す（読み込んで足して書く）。
 // =============================================================================
@@ -12,18 +14,26 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// deny は allow より強いので、.env.* をまとめて止めず（.env.op と見本を読めるように）よくある名前を並べる
 const DENY = [
   'Read(**/.env)',
   'Read(**/.env.local)',
+  'Read(**/.env.*.local)',
   'Read(**/.env.production)',
+  'Read(**/.env.staging)',
+  'Read(**/.env.test)',
   'Read(**/.env.development)',
+  'Read(**/.env.bak)',
   'Edit(**/.env)',
   'Bash(op read:*)',
   'Bash(op item get:*)',
   'Bash(op document get:*)',
+  'Bash(op inject:*)',
+  'Bash(op run:*)',
   'Bash(security find-generic-password:*)',
   'Bash(security find-internet-password:*)',
 ];
+const MATCHER = 'Bash|PowerShell';
 
 function homeDir() {
   const h = process.platform === 'win32'
@@ -32,17 +42,18 @@ function homeDir() {
   return h.replace(/\\/g, '/');
 }
 
-function guardPath(home) {
-  return `${home}/.claude/skills/op-secrets/scripts/op-guard.js`;
+function guardPath(skillDir) {
+  return `${skillDir.replace(/\\/g, '/').replace(/\/+$/, '')}/scripts/op-guard.js`;
 }
 
-function guardCommand(home) {
-  return `node "${guardPath(home)}"`;
+function guardCommand(skillDir) {
+  return `node "${guardPath(skillDir)}"`;
 }
 
-function hasHook(settings, cmd) {
+// 同じ command のフックの入れ物（無ければ null）
+function findHook(settings, cmd) {
   const pre = settings && settings.hooks && Array.isArray(settings.hooks.PreToolUse) ? settings.hooks.PreToolUse : [];
-  return pre.some((e) => e && Array.isArray(e.hooks) && e.hooks.some((h) => h && h.command === cmd));
+  return pre.find((e) => e && Array.isArray(e.hooks) && e.hooks.some((h) => h && h.command === cmd)) || null;
 }
 
 function missingDeny(settings) {
@@ -59,10 +70,11 @@ function stamp() {
 function main() {
   const argv = process.argv.slice(2);
   const check = argv.includes('--check');
-  const i = argv.indexOf('--settings');
+  const opt = (name) => { const k = argv.indexOf(name); return k >= 0 && argv[k + 1] ? argv[k + 1] : null; };
   const home = homeDir();
-  const file = i >= 0 && argv[i + 1] ? argv[i + 1] : path.join(home, '.claude', 'settings.json');
-  const cmd = guardCommand(home);
+  const file = opt('--settings') || path.join(home, '.claude', 'settings.json');
+  const skillDir = opt('--skill-dir') || `${home}/.claude/skills/op-secrets`;
+  const cmd = guardCommand(skillDir);
 
   let settings = {};
   let existed = false;
@@ -83,14 +95,17 @@ function main() {
     }
   }
 
-  const needHook = !hasHook(settings, cmd);
+  const hook = findHook(settings, cmd);
+  const needHook = !hook;
+  const needMatcher = !!hook && hook.matcher !== MATCHER;
   const needDeny = missingDeny(settings);
 
   if (check) {
     const problems = [];
     if (needHook) problems.push(`見張り（PreToolUse フック）が未登録: ${cmd}`);
+    if (needMatcher) problems.push(`見張りの対象が ${MATCHER} になっていません（今: ${hook.matcher}）`);
     if (needDeny.length) problems.push(`禁止リスト（permissions.deny）に足りないもの: ${needDeny.join(', ')}`);
-    if (!fs.existsSync(guardPath(home))) problems.push(`見張りの本体がありません: ${guardPath(home)}`);
+    if (!fs.existsSync(guardPath(skillDir))) problems.push(`見張りの本体がありません: ${guardPath(skillDir)}`);
     if (problems.length) {
       for (const p of problems) process.stdout.write(`${p}\n`);
       return 2;
@@ -99,7 +114,7 @@ function main() {
     return 0;
   }
 
-  if (!needHook && !needDeny.length) {
+  if (!needHook && !needMatcher && !needDeny.length) {
     process.stdout.write('settings.json: 変更なし（登録済み）\n');
     return 0;
   }
@@ -107,8 +122,9 @@ function main() {
   if (needHook) {
     if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
     if (!Array.isArray(settings.hooks.PreToolUse)) settings.hooks.PreToolUse = [];
-    settings.hooks.PreToolUse.push({ matcher: 'Bash', hooks: [{ type: 'command', command: cmd }] });
+    settings.hooks.PreToolUse.push({ matcher: MATCHER, hooks: [{ type: 'command', command: cmd }] });
   }
+  if (needMatcher) hook.matcher = MATCHER;
   if (needDeny.length) {
     if (!settings.permissions || typeof settings.permissions !== 'object' || Array.isArray(settings.permissions)) settings.permissions = {};
     if (!Array.isArray(settings.permissions.deny)) settings.permissions.deny = [];
@@ -116,11 +132,11 @@ function main() {
   }
 
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (existed) fs.copyFileSync(file, `${file}.bak-${stamp()}`);
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n');
-  fs.renameSync(tmp, file);
-  process.stdout.write(`settings.json: 見張り${needHook ? 'を登録' : 'は登録済み'}・禁止リストに ${needDeny.length} 件追加（${file}）\n`);
+  // シンボリックリンクなら実体に書く（rename で差し替えるとリンクが普通のファイルに変わってしまう）
+  const target = existed ? fs.realpathSync(file) : file;
+  if (existed) fs.copyFileSync(target, `${file}.bak-${stamp()}`);
+  fs.writeFileSync(target, JSON.stringify(settings, null, 2) + '\n');
+  process.stdout.write(`settings.json: 見張り${needHook ? 'を登録' : needMatcher ? 'の対象を更新' : 'は登録済み'}・禁止リストに ${needDeny.length} 件追加（${file}）\n`);
   return 0;
 }
 

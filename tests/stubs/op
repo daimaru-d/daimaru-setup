@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # テスト用の 1Password CLI（op）のスタブ。本物の op・金庫には触らない。
 # 呼ばれた引数を $OP_STUB_LOG に 1 行ずつ記録し、決まった応答を返す。
-#   OP_STUB_VERSION（既定 2.30.0）/ OP_STUB_WHOAMI_RC / OP_STUB_VAULT_RC / OP_STUB_ITEM_EXISTS=1
-#   item create / edit の --template の中身は $OP_STUB_DIR/template-<n>.json に写す（届いたかの確認用）
+#   OP_STUB_VERSION（既定 2.30.0）/ OP_STUB_WHOAMI_RC / OP_STUB_VAULT_RC
+#   OP_STUB_ITEM_STATE=missing|exists|duplicate（既定 missing。OP_STUB_ITEM_EXISTS=1 は exists と同じ）
+#   OP_STUB_EXISTING_USER: exists のとき、既存の項目の username 欄に入れておく値
+#   item create / edit が標準入力で受けたテンプレートは $OP_STUB_DIR/template-<n>.json に写す（届いたかの確認用）
+#   run は -- の後のコマンドをそのまま動かす（子プロセスの環境を確かめるため）
 log="${OP_STUB_LOG:-/dev/null}"
 sa=0; [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && sa=1
 printf 'SA=%s ARGS=%s\n' "$sa" "$*" >> "$log"
@@ -16,19 +19,9 @@ while [ ${#args[@]} -gt 0 ]; do
   esac
 done
 sub="${args[0]:-}"; sub2="${args[1]:-}"
+state="${OP_STUB_ITEM_STATE:-missing}"
+[ "${OP_STUB_ITEM_EXISTS:-0}" = 1 ] && state=exists
 
-template_of(){
-  local i=0 a
-  for a in "$@"; do
-    case "$a" in --template=*) echo "${a#--template=}"; return;; esac
-    if [ "$a" = --template ]; then echo "${args[$((i + 1))]}"; return; fi
-    i=$((i + 1))
-  done
-}
-
-case "$sub" in
-  --version) echo "${OP_STUB_VERSION:-2.30.0}"; exit 0;;
-esac
 case "$1" in
   --version) echo "${OP_STUB_VERSION:-2.30.0}"; exit 0;;
 esac
@@ -38,18 +31,26 @@ case "$sub $sub2" in
   "account list") printf 'URL                                EMAIL                 USER ID\ndaimaruenterprise.1password.com    someone@example.com   XXXXXXXX\n'; exit 0;;
   "vault get") [ "${OP_STUB_VAULT_RC:-0}" = 0 ] || exit "${OP_STUB_VAULT_RC}"; echo '{"name":"Claude-Automation"}'; exit 0;;
   "item get")
-    if [ "${OP_STUB_ITEM_EXISTS:-0}" = 1 ]; then
-      echo '{"id":"stubid","title":"stub","category":"LOGIN","fields":[{"id":"notesPlain","type":"STRING","label":"notesPlain","value":"keep-me"}]}'
-      exit 0
-    fi
-    echo '[ERROR] item not found' >&2; exit 1;;
+    case "$state" in
+      exists)
+        printf '{"id":"stubid","title":"stub","category":"LOGIN","fields":[{"id":"notesPlain","type":"STRING","label":"notesPlain","value":"keep-me"},{"id":"username","type":"STRING","purpose":"USERNAME","label":"username","value":"%s"}]}\n' "${OP_STUB_EXISTING_USER:-}"
+        exit 0;;
+      duplicate) echo "[ERROR] More than one item matches \"${args[2]:-}\". Try again and specify the item by its ID" >&2; exit 1;;
+      *) echo "[ERROR] \"${args[2]:-}\" isn't an item. Specify the item with its UUID, name, or domain." >&2; exit 1;;
+    esac;;
+  "item list") echo '[{"id":"aaaa1111","title":"andpad","updated_at":"2026-01-01T00:00:00Z"},{"id":"bbbb2222","title":"andpad","updated_at":"2026-01-02T00:00:00Z"}]'; exit 0;;
   "item create"|"item edit")
-    t="$(template_of "${args[@]}")"
-    n=$(ls "${OP_STUB_DIR:-/tmp}"/template-*.json 2>/dev/null | wc -l | tr -d ' ')
-    [ -n "$t" ] && cp "$t" "${OP_STUB_DIR:-/tmp}/template-$((n + 1)).json"
+    n=$(find "${OP_STUB_DIR:-/tmp}" -name 'template-*.json' | wc -l | tr -d ' ')
+    if [ ! -t 0 ]; then cat > "${OP_STUB_DIR:-/tmp}/template-$((n + 1)).json"; fi
     echo '{"id":"stubid","fields":[{"value":"STUB-CREATE-OUTPUT"}]}'
     exit 0;;
-  "run "*) exit 0;;
+  "run "*)
+    i=0
+    for a in "${args[@]}"; do
+      i=$((i + 1))
+      if [ "$a" = "--" ]; then exec "${args[@]:$i}"; fi
+    done
+    exit 0;;
 esac
 echo "op stub: unknown: $*" >&2
 exit 9

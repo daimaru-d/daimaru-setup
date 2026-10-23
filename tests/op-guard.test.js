@@ -22,93 +22,15 @@ function bash(command) {
   return run({ tool_name: 'Bash', tool_input: { command }, session_id: 'test-session', cwd: '/work/dir' });
 }
 
-const BLOCK = [
-  'op read op://Claude-Automation/andpad/password',
-  'op read "op://Claude-Automation/andpad/password"',
-  'op item get andpad --vault Claude-Automation',
-  'op item get andpad --otp',
-  'op --account daimaruenterprise.1password.com item get andpad',
-  'op document get secret-file',
-  'op signin --raw',
-  'op signin --account daimaruenterprise.1password.com --raw',
-  'op-claude read op://x/y/z',
-  '~/.claude/bin/op-claude item get abc',
-  'ls; op read op://a/b/c',
-  'echo $(op read op://a/b/c)',
-  'bash -c "op item get andpad"',
-  'cat .env',
-  'cat andpad-browser/.env',
-  'less .env.local',
-  'head -n 3 .env.production',
-  'tail config/.env',
-  'Get-Content .env',
-  'type .env',
-  'strings .env',
-  'xxd .env | head',
-  'grep -r PASSWORD .env',
-  'grep -i password andpad-browser/.env',
-  'env',
-  'printenv',
-  'set',
-  'export',
-  'declare -x',
-  'env | grep ANDPAD',
-  'Get-ChildItem env:',
-  'gci env:',
-  'dir env:',
-  'op run --env-file .env.op -- env',
-  'op run --env-file .env.op -- printenv',
-  'echo $ANDPAD_PASSWORD',
-  'echo ${API_KEY}',
-  'echo "$OP_SERVICE_ACCOUNT_TOKEN"',
-  'printf "%s" $DB_SECRET',
-  'Write-Host $env:ANDPAD_PASSWORD',
-  'echo %ANDPAD_PASSWORD%',
-  'printenv ANDPAD_PASSWORD',
-  'security find-generic-password -s daimaru-op-sa -w',
-  'security find-internet-password -s example.com -g',
-  'security dump-keychain',
-  'secret-tool lookup service daimaru-op-sa account me',
-  'powershell.exe -Command "Get-Content $env:LOCALAPPDATA\\daimaru-op\\sa-token.dpapi | ConvertTo-SecureString"',
-  'cat ~/.config/op/config',
-  'cat .op/config',
-  'cat ~/.config/daimaru-op/sa-token',
-  'op-run.sh -- env',
-  'bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- printenv',
-  'op-run.sh --env-file .env.op -- set',
-];
+// 表は tests/guard-cases.txt（--- PASS より上が止める、下が通す。# で始まる行は説明）
+const CASES = fs.readFileSync(path.join(__dirname, 'guard-cases.txt'), 'utf8').split(/\r?\n/).filter((l) => l && !l.startsWith('# '));
+const SEP = CASES.findIndex((l) => l.startsWith('--- PASS'));
+const BLOCK = CASES.slice(0, SEP);
+const PASS = CASES.slice(SEP + 1);
 
-const PASS = [
-  "grep -n 'op read' SKILL.md",
-  'grep -n "op item get" skills/op-secrets/SKILL.md',
-  'op item list',
-  'op item list --vault Claude-Automation --format json',
-  'op vault list',
-  'op whoami',
-  'op --account daimaruenterprise.1password.com whoami',
-  'op-run.sh -- node x.mjs',
-  'bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- node create-mitsumori-draft.mjs',
-  'op run --env-file .env.op -- node x.mjs',
-  'cat .env.op',
-  'cat .env.example',
-  'cat .env.op.example',
-  'cat .env.sample',
-  'git diff',
-  'echo $HOME',
-  'echo $DRY_RUN',
-  'echo "hello"',
-  'set -euo pipefail',
-  'export DRY_RUN=1',
-  'env DRY_RUN=1 node x.mjs',
-  'ls -la',
-  'grep -rn PASSWORD src/',
-  'cat README.md',
-  'security find-generic-password -s daimaru-op-sa',
-  'bash ~/.claude/skills/op-secrets/scripts/op-sa-token.sh status',
-  'bash ~/.claude/skills/op-secrets/scripts/op-doctor.sh',
-  'cd /tmp/set',
-  'node --test tests/',
-];
+test('表の件数（止める 25 件以上・通す 25 件以上）', () => {
+  assert.ok(BLOCK.length >= 25 && PASS.length >= 25, `${BLOCK.length} / ${PASS.length}`);
+});
 
 for (const cmd of BLOCK) {
   test(`止める: ${cmd}`, () => {
@@ -128,6 +50,17 @@ for (const cmd of PASS) {
 
 test('Bash 以外のツールは通す', () => {
   assert.strictEqual(run({ tool_name: 'Read', tool_input: { file_path: '.env' } }).status, 0);
+});
+
+test('PowerShell ツールも見張る（command 以外のキーでも文字列の値をすべて見る）', () => {
+  let r = run({ tool_name: 'PowerShell', tool_input: { command: 'Get-Content .env' } });
+  assert.strictEqual(r.status, 2);
+  r = run({ tool_name: 'PowerShell', tool_input: { script: 'gci env:' } });
+  assert.strictEqual(r.status, 2);
+  r = run({ tool_name: 'PowerShell', tool_input: { args: { inner: ['Write-Host $env:ANDPAD_PASSWORD'] } } });
+  assert.strictEqual(r.status, 2);
+  r = run({ tool_name: 'PowerShell', tool_input: { command: 'Get-ChildItem .' } });
+  assert.strictEqual(r.status, 0);
 });
 
 test('JSON が読めないときは通す（fail-open）', () => {

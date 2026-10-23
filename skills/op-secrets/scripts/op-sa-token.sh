@@ -8,8 +8,8 @@
 # 保管先: Mac=キーチェーン / Windows=DPAPI で暗号化したファイル（そのユーザーしか復号できない）
 #         Linux=secret-tool（無ければ ~/.config/daimaru-op/sa-token を 0600 で置き、警告）
 # トークンは 1Password の管理者が発行する。値は画面・ログ・ファイル名・引数に出さない
-#   ※ Mac の security コマンドだけは -w の引数で渡す（標準入力で受ける方法が無いため）。
-#     この引数が見えるのは security が動いている一瞬だけで、表示やログには残らない。
+#   Mac は security -i（対話モード）に、保存するコマンドの行を標準入力で渡す（引数には載せない）
+# set は端末から読む。端末が無い（Claude Code の Bash から呼ばれた）ときは、人が実行する 1 行を案内して止める
 # =============================================================================
 OPS_SA_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
@@ -49,7 +49,11 @@ OPS_SA_PS_CLEAR='Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $en
 ops_sa_store(){
   local b; b="$(ops_sa_backend)"
   case "$b" in
-    keychain) security add-generic-password -U -s "$OPS_SA_SERVICE" -a "$(ops_sa_user)" -w "$OPS_SA_TOKEN_IN" >/dev/null 2>&1;;
+    keychain)
+      # トークンに " や \ や空白は入らない前提（1Password のトークンは英数字と記号 - _ . = + / だけ）
+      case "$OPS_SA_TOKEN_IN" in *[!A-Za-z0-9._=+/-]*) err "トークンに想定外の文字が入っています"; return 1;; esac
+      printf 'add-generic-password -U -s "%s" -a "%s" -w "%s"\n' "$OPS_SA_SERVICE" "$(ops_sa_user)" "$OPS_SA_TOKEN_IN" \
+        | security -i >/dev/null 2>&1 && ops_sa_exists;;
     dpapi)    printf '%s' "$OPS_SA_TOKEN_IN" | powershell.exe -NoProfile -NonInteractive -Command "$OPS_SA_PS_STORE" >/dev/null;;
     secret-tool) printf '%s' "$OPS_SA_TOKEN_IN" | secret-tool store --label="$OPS_SA_SERVICE" service "$OPS_SA_SERVICE" account "$(ops_sa_user)";;
     file)
@@ -103,7 +107,17 @@ ops_sa_main(){
   case "${1:-}" in
     set)
       OPS_SA_TOKEN_IN=""
-      IFS= read -r -s -p "サービスアカウントのトークン（表示されません）: " OPS_SA_TOKEN_IN || true
+      if ops_have_tty; then
+        IFS= read -r -s -p "サービスアカウントのトークン（表示されません）: " OPS_SA_TOKEN_IN < /dev/tty || true
+      elif [ "${OPS_SA_STDIN:-0}" = 1 ]; then
+        # テストと、値を標準入力で渡す呼び出し元のためだけの入口
+        IFS= read -r -s OPS_SA_TOKEN_IN || true
+      else
+        err "ここでは表示されない入力ができません（端末がありません）。トークンは人が次の 1 行で入れてください"
+        hint "Windows（PowerShell）: irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.ps1 | iex"
+        hint "Mac（ターミナル）    : curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.sh | bash"
+        return 2
+      fi
       printf '\n' >&2
       OPS_SA_TOKEN_IN="${OPS_SA_TOKEN_IN%$'\r'}"
       if [ -z "$OPS_SA_TOKEN_IN" ]; then err "空のため保管しませんでした"; return 2; fi

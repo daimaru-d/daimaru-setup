@@ -28,7 +28,8 @@ chmod 700 "$DEST"/scripts/*.sh 2>/dev/null || true
 
 # 2) Claude Code の設定に見張りと禁止リストを足す
 if have node; then
-  if node "$DEST/scripts/settings-merge.js"; then ok "Claude Code の設定を更新しました"
+  # フックのパスは、実際にコピーした先（Git Bash の HOME）をそのまま使う（HOME と USERPROFILE の食い違い対策）
+  if node "$(ops_native_path "$DEST/scripts/settings-merge.js")" --skill-dir "$(ops_native_path "$DEST")"; then ok "Claude Code の設定を更新しました"
   else warn "Claude Code の設定を更新できませんでした（~/.claude/settings.json を確認してください）"; fi
 else
   warn "Node.js が無いため、Claude Code の設定を更新できませんでした（daimaru-setup の本体セットアップで入ります）"

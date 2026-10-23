@@ -84,14 +84,62 @@ ops_op(){
   "$OP_BIN" ${OPS_ACCT[@]+"${OPS_ACCT[@]}"} "$@"
 }
 
-# キー名が「秘密らしい」か（大文字小文字は区別しない）
+# キー名が「秘密らしい」か（大文字小文字は区別しない。op-template.js の isSecretKey と同じ規則）
+# 長い語（PASSWORD・SECRET・TOKEN など）は含んでいれば秘密。短い語（PASS・KEY）は _ で区切られた語のときだけ
+# （BYPASS_CACHE や MONKEY_PATH は秘密ではない）
 ops_is_secret_key(){
   local up
   up="$(printf '%s' "$1" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
   case "$up" in
-    *PASS*|*SECRET*|*TOKEN*|*KEY*|*CREDENTIAL*|*PRIVATE*) return 0;;
+    *PASSWORD*|*PASSWD*|*SECRET*|*TOKEN*|*CREDENTIAL*|*PRIVATE*|*APIKEY*|*ACCESSKEY*) return 0;;
+  esac
+  case "_${up}_" in
+    *_PASS_*|*_KEY_*) return 0;;
   esac
   return 1
+}
+
+# 端末（/dev/tty）が開けるか。Claude Code の Bash から呼ばれたときは開けない
+ops_have_tty(){
+  { : < /dev/tty; } 2>/dev/null
+}
+
+# 表示しない入力: 端末が開ければ端末から、無ければ標準入力から読む（Claude Code の Bash では空になる）
+# 使い方: ops_read_secret 変数名 "プロンプト"
+ops_read_secret(){
+  local __v=""
+  if ops_have_tty; then IFS= read -r -s -p "$2" __v < /dev/tty || true
+  else IFS= read -r -s -p "$2" __v || true; fi
+  printf '\n' >&2
+  __v="${__v%$'\r'}"
+  printf -v "$1" '%s' "$__v"
+  __v=""
+}
+
+# node（Windows ではネイティブのプログラム）に渡すパス。Git Bash では C:/Users/... の形にする
+ops_native_path(){
+  if [ "$OPS_OS" = win ] && have cygpath; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+# 1Password の項目の有無: exists / missing / duplicate / error を表示する（値は読まない）
+ops_item_state(){
+  local e rc=0
+  e="$(ops_op item get "$1" --vault "$2" --format json 2>&1 >/dev/null)" || rc=$?
+  if [ "$rc" = 0 ]; then echo exists; return 0; fi
+  case "$(printf '%s' "$e" | LC_ALL=C tr '[:upper:]' '[:lower:]')" in
+    *"more than one"*|*multiple*) echo duplicate;;
+    *"isn't an item"*|*"not found"*|*"no item"*) echo missing;;
+    *) echo error;;
+  esac
+}
+
+# 同じ名前の項目を一覧する（ID と更新日時だけ。値は読まない）
+ops_show_duplicates(){
+  ops_op item list --vault "$2" --format json 2>/dev/null | node -e '
+    let s = ""; process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+      let a = []; try { a = JSON.parse(s || "[]"); } catch (_) { /* 読めなければ空 */ }
+      for (const it of a.filter((x) => x.title === process.argv[1])) console.log(`      - ID ${it.id}（更新 ${it.updated_at || "?"}）`);
+    });' "$1"
 }
 
 # 項目名の検証: 英小文字・数字・ハイフンだけ（先頭は英小文字か数字）。秘密参照は ASCII でないと失敗するため

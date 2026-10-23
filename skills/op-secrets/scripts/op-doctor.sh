@@ -89,7 +89,7 @@ fi
 
 # 5) Claude Code の見張り（フック）と禁止リスト
 if have node; then
-  if out="$(node "$HERE/settings-merge.js" --check 2>&1)"; then
+  if out="$(node "$(ops_native_path "$HERE/settings-merge.js")" --check --skill-dir "$(ops_native_path "$HOME/.claude/skills/op-secrets")" 2>&1)"; then
     ok "5. Claude Code の見張りと禁止リストが入っています"
   else
     err "5. Claude Code の設定に見張り・禁止リストが足りません"
@@ -136,7 +136,9 @@ if [ "$OP_SA_MODE" = 1 ]; then
   if [ "$sa_loaded" = 1 ]; then ok "7. 無人実行のトークンが保管されています"
   else
     err "7. 無人実行（OP_SA_MODE=1）なのにトークンが保管されていません"
-    hint "直し方: bash ~/.claude/skills/op-secrets/scripts/op-sa-token.sh set（トークンは管理者から受け取る）"
+    hint "直し方: 管理者がこの PC で次の 1 行を実行してトークンを入れる"
+    hint "Windows（PowerShell）: irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.ps1 | iex"
+    hint "Mac（ターミナル）    : curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.sh | bash"
     fail 7
   fi
 fi

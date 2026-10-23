@@ -30,21 +30,28 @@ FAKE_USER='someone@example.com'
 reset_stub(){ : > "$OP_STUB_LOG"; rm -f "$OP_STUB_DIR"/template-*.json; }
 
 echo "== 構文"
-SH_FILES=("$S"/*.sh "$ROOT/scripts/op/setup.sh" "$ROOT/tests/scripts.test.sh" "$ROOT/tests/stubs/op" "$ROOT/setup.sh")
+SH_FILES=("$S"/*.sh "$ROOT/scripts/op/setup.sh" "$ROOT/scripts/op/sa-token.sh" "$ROOT/tests/scripts.test.sh" "$ROOT/tests/stubs/op" "$ROOT/setup.sh")
 for f in "${SH_FILES[@]}"; do check "bash -n ${f#"$ROOT"/}" bash -n "$f"; done
 if command -v /bin/bash >/dev/null && /bin/bash --version | head -1 | grep -q 'version 3'; then
-  for f in "$S"/*.sh; do check "bash 3.2 -n ${f#"$ROOT"/}" /bin/bash -n "$f"; done
+  for f in "$S"/*.sh "$ROOT/scripts/op/setup.sh" "$ROOT/scripts/op/sa-token.sh"; do check "bash 3.2 -n ${f#"$ROOT"/}" /bin/bash -n "$f"; done
 fi
 if command -v shellcheck >/dev/null 2>&1; then
   # 既存の setup.sh は対象外（今回の追記以外の既存の警告があるため）
-  for f in "$S"/*.sh "$ROOT/scripts/op/setup.sh" "$ROOT/tests/scripts.test.sh" "$ROOT/tests/stubs/op"; do
+  for f in "$S"/*.sh "$ROOT/scripts/op/setup.sh" "$ROOT/scripts/op/sa-token.sh" "$ROOT/tests/scripts.test.sh" "$ROOT/tests/stubs/op"; do
     check "shellcheck ${f#"$ROOT"/}" shellcheck -S warning -x -P "$S" "$f"
   done
 else
   echo "（shellcheck が無いため省略）"
 fi
 for f in "$S"/*.js "$ROOT"/tests/*.js; do check "node --check ${f#"$ROOT"/}" node --check "$f"; done
-check "scripts/op/setup.ps1 は BOM なし（irm | iex 用）" bash -c "[ \"\$(head -c 3 '$ROOT/scripts/op/setup.ps1' | od -An -tx1 | tr -d ' ')\" != efbbbf ]"
+for f in setup.ps1 sa-token.ps1; do
+  check "scripts/op/$f は BOM なし（irm | iex 用）" bash -c "[ \"\$(head -c 3 '$ROOT/scripts/op/$f' | od -An -tx1 | tr -d ' ')\" != efbbbf ]"
+done
+# .gitattributes: Windows で clone しても .sh が LF のまま（i/lf と attr/text eol=lf）
+eol="$(git -C "$ROOT" ls-files --eol -- '*.sh' tests/stubs/op)"
+check ".gitattributes: *.sh と stub は i/lf・eol=lf" bash -c '[ -n "$1" ] && ! printf "%s\n" "$1" | grep -v "i/lf" | grep -q . && ! printf "%s\n" "$1" | grep -v "attr/text eol=lf" | grep -q .' _ "$eol"
+eol="$(git -C "$ROOT" ls-files --eol -- '*.ps1')"
+check ".gitattributes: *.ps1 は eol=crlf" bash -c '[ -n "$1" ] && ! printf "%s\n" "$1" | grep -v "attr/text eol=crlf" | grep -q .' _ "$eol"
 
 echo "== lib.sh"
 (
@@ -57,7 +64,8 @@ echo "== lib.sh"
 (
   . "$S/lib.sh"
   [ "$(ops_var_prefix andpad-browser)" = ANDPAD_BROWSER ] && ops_is_secret_key api_key && ops_is_secret_key DB_PASS \
-    && ! ops_is_secret_key DRY_RUN
+    && ops_is_secret_key ANDPAD_PASSWORD && ops_is_secret_key CLIENT_SECRET && ops_is_secret_key KEY \
+    && ! ops_is_secret_key DRY_RUN && ! ops_is_secret_key BYPASS_CACHE && ! ops_is_secret_key MONKEY_PATH && ! ops_is_secret_key KEYBOARD
 ) && pass "変数名の生成・秘密キーの判定" || fail "変数名の生成・秘密キーの判定"
 (
   . "$S/lib.sh"
@@ -85,7 +93,9 @@ check "バックアップは 1 つ" [ "$(find "$(dirname "$SET")" -name 'setting
 check "既存の設定を残す" node -e '
   const s=require(process.argv[1]); const ok = s.model==="x" && s.permissions.allow[0]==="Bash(ls:*)"
     && s.hooks.PreToolUse[0].matcher==="Edit" && s.hooks.PreToolUse.length===2
-    && s.permissions.deny.filter(d=>d==="Read(**/.env)").length===1 && s.permissions.deny.length===10;
+    && s.permissions.deny.filter(d=>d==="Read(**/.env)").length===1 && s.permissions.deny.length===16
+    && s.permissions.deny.includes("Bash(op inject:*)") && s.permissions.deny.includes("Bash(op run:*)")
+    && !s.permissions.deny.includes("Read(**/.env.op)") && s.hooks.PreToolUse[1].matcher==="Bash|PowerShell";
   process.exit(ok?0:1)' "$SET"
 check "フックの command は HOME の絶対パス" node -e '
   const s=require(process.argv[1]); const c=s.hooks.PreToolUse[1].hooks[0].command;
@@ -93,6 +103,18 @@ check "フックの command は HOME の絶対パス" node -e '
 out="$(node "$S/settings-merge.js" --check --settings "$SET" 2>&1)"; rc=$?
 check "--check: 見張りの本体が無ければ 2" [ "$rc" = 2 ]
 check "--check: 何が無いかを出す" contains "$out" "見張りの本体"
+# 古い matcher（Bash だけ）の登録は Bash|PowerShell に直す
+printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"node \\"%s/.claude/skills/op-secrets/scripts/op-guard.js\\""}]}]}}\n' "$HOME" > "$T/settings/old.json"
+node "$S/settings-merge.js" --settings "$T/settings/old.json" >/dev/null
+check "古い matcher を Bash|PowerShell に直す（足さない）" node -e '
+  const s=require(process.argv[1]); process.exit(s.hooks.PreToolUse.length===1 && s.hooks.PreToolUse[0].matcher==="Bash|PowerShell" ? 0 : 1)' "$T/settings/old.json"
+# --skill-dir: 実際に置いた場所でフックを登録する
+node "$S/settings-merge.js" --settings "$T/settings/skilldir.json" --skill-dir "$T/elsewhere/op-secrets" >/dev/null
+check "--skill-dir の場所でフックを登録" grep -qF "$T/elsewhere/op-secrets/scripts/op-guard.js" "$T/settings/skilldir.json"
+# シンボリックリンクの settings.json はリンクのまま実体に書く
+mkdir -p "$T/dotfiles"; printf '{"model":"y"}\n' > "$T/dotfiles/settings.json"; ln -s "$T/dotfiles/settings.json" "$T/settings/link.json"
+node "$S/settings-merge.js" --settings "$T/settings/link.json" >/dev/null
+check "シンボリックリンクを壊さない" bash -c "[ -L '$T/settings/link.json' ] && grep -q 'op-guard.js' '$T/dotfiles/settings.json' && grep -q '\"model\": \"y\"' '$T/dotfiles/settings.json'"
 printf '{ broken' > "$T/settings/broken.json"
 node "$S/settings-merge.js" --settings "$T/settings/broken.json" >/dev/null 2>&1; rc=$?
 check "壊れた JSON は触らずに 2" [ "$rc" = 2 ]
@@ -113,6 +135,9 @@ check "settings-merge --check が通る" bash -c "node '$S/settings-merge.js' --
 
 echo "== op-run.sh"
 cd "$WORK" || exit 1
+: > x.mjs; : > "a b.mjs"
+# 子プロセスの環境を「ある/ない」だけで出す（値は出さない）
+printf '#!/usr/bin/env bash\nfor v in OP_SERVICE_ACCOUNT_TOKEN OP_ACCOUNT ANDPAD_PASSWORD; do if [ -n "${!v:-}" ]; then echo "$v=SET"; else echo "$v=UNSET"; fi; done\n' > showenv.sh
 printf '# comment\nANDPAD_EMAIL=op://Claude-Automation/andpad/username\nANDPAD_PASSWORD=%s\nDRY_RUN=1\n' "$FAKE_SECRET" > .env.op
 reset_stub
 out="$(bash "$S/op-run.sh" -- node x.mjs 2>&1)"; rc=$?
@@ -121,10 +146,22 @@ check "(a) 行番号を出す" contains "$out" "行 3"
 check "(a) 値は出さない" not_contains "$out" "$FAKE_SECRET"
 check "(a) op は呼ばない" [ ! -s "$OP_STUB_LOG" ]
 printf '# 参照だけ\nANDPAD_EMAIL=op://Claude-Automation/andpad/username\nANDPAD_PASSWORD=op://Claude-Automation/andpad/password\nDRY_RUN=1\nEMPTY_TOKEN=\n' > .env.op
-for c in env printenv set export; do
-  reset_stub; bash "$S/op-run.sh" -- "$c" >/dev/null 2>&1; rc=$?
+for c in env printenv set export /usr/bin/env "env -0" "env -u FOO" "printenv ANDPAD_PASSWORD"; do
+  reset_stub
+  # shellcheck disable=SC2086  # c は空白で分けて渡す
+  bash "$S/op-run.sh" -- $c >/dev/null 2>&1; rc=$?
   check "(b) -- $c は拒否" bash -c '[ "$1" = 2 ] && [ ! -s "$2" ]' _ "$rc" "$OP_STUB_LOG"
 done
+for c in "sh -c" "bash -c" "node -e" "node -p" "python3 -c" "python -c" "pwsh -Command" "/bin/sh -c"; do
+  reset_stub
+  # shellcheck disable=SC2086
+  out="$(bash "$S/op-run.sh" -- $c 'echo x' 2>&1)"; rc=$?
+  check "(e) -- ${c}（その場のスクリプト）は拒否" bash -c '[ "$1" = 2 ] && [ ! -s "$2" ] && [[ "$3" == *"ファイルにして"* ]]' _ "$rc" "$OP_STUB_LOG" "$out"
+done
+reset_stub; bash "$S/op-run.sh" -- env DRY_RUN=1 node x.mjs >/dev/null 2>&1; rc=$?
+check "(e) env の後にコマンドがあれば通す" [ "$rc" = 0 ]
+reset_stub; bash "$S/op-run.sh" -- bash showenv.sh >/dev/null 2>&1; rc=$?
+check "(e) スクリプトのファイルは通す" [ "$rc" = 0 ]
 reset_stub; out="$(bash "$S/op-run.sh" -- node x.mjs 2>&1)"; rc=$?
 check "(c) 正常時は 0" [ "$rc" = 0 ]
 check "(c) op --account ... run --env-file .env.op -- node x.mjs を呼ぶ" \
@@ -139,6 +176,13 @@ check "(d) 形の不正な行は拒否" [ "$rc" = 2 ]
 
 echo "== op-sa-token.sh（file 保管でテスト。キーチェーンには触らない）"
 out="$(printf '%s\n' "$FAKE_SECRET" | bash "$S/op-sa-token.sh" set 2>&1)"; rc=$?
+if { : < /dev/tty; } 2>/dev/null; then
+  echo "（端末があるため、端末なしの set の確認は省略）"
+else
+  check "端末なしの set は 2 で、人が実行する 1 行を案内" bash -c '[ "$1" = 2 ] && [[ "$2" == *sa-token.ps1* && "$2" == *sa-token.sh* ]]' _ "$rc" "$out"
+  check "端末なしの set は保管しない" [ ! -e "$HOME/.config/daimaru-op/sa-token" ]
+fi
+out="$(printf '%s\n' "$FAKE_SECRET" | OPS_SA_STDIN=1 bash "$S/op-sa-token.sh" set 2>&1)"; rc=$?
 check "set は 0" [ "$rc" = 0 ]
 check "set は値を出さない" not_contains "$out" "$FAKE_SECRET"
 check "保管ファイルは 0600" bash -c "ls -l '$HOME/.config/daimaru-op/sa-token' | grep -q '^-rw-------'"
@@ -147,7 +191,11 @@ check "status は あり・値を出さない" bash -c '[[ "$1" == *あり* && "
 bash "$S/op-sa-token.sh" load >/dev/null 2>&1; rc=$?
 check "load を直接呼ぶと拒否" [ "$rc" = 2 ]
 reset_stub; out="$(bash "$S/op-run.sh" --sa -- node x.mjs 2>&1)"
-check "--sa: --account を付けずトークンを環境に載せる" grep -qxF 'SA=1 ARGS=run --env-file .env.op --no-masking=false -- node x.mjs' "$OP_STUB_LOG"
+check "--sa: --account を付けずトークンを op にだけ渡す" grep -qxF 'SA=1 ARGS=run --env-file .env.op --no-masking=false -- env -u OP_SERVICE_ACCOUNT_TOKEN node x.mjs' "$OP_STUB_LOG"
+reset_stub; out="$(OP_ACCOUNT=someone.1password.com bash "$S/op-run.sh" --sa -- bash showenv.sh 2>&1)"
+check "--sa: 子プロセスにトークンと OP_ACCOUNT を渡さない" bash -c '[[ "$1" == *OP_SERVICE_ACCOUNT_TOKEN=UNSET* && "$1" == *OP_ACCOUNT=UNSET* ]]' _ "$out"
+reset_stub; out="$(OP_ACCOUNT=daimaruenterprise.1password.com bash "$S/op-run.sh" -- bash showenv.sh 2>&1)"
+check "通常: 子プロセスに OP_ACCOUNT を渡さない" bash -c '[[ "$1" == *OP_ACCOUNT=UNSET* ]]' _ "$out"
 check "--sa: 値を出さない" not_contains "$out$(cat "$OP_STUB_LOG")" "$FAKE_SECRET"
 bash "$S/op-sa-token.sh" clear >/dev/null 2>&1
 out="$(bash "$S/op-sa-token.sh" status 2>&1)"; rc=$?
@@ -195,7 +243,7 @@ check "参照行を表示（PASSWORD）" contains "$out" "ANDPAD_PASSWORD=op://C
 check "パスワードを画面に出さない" not_contains "$out" "$FAKE_SECRET"
 check "op item create の出力を出さない" not_contains "$out" "STUB-CREATE-OUTPUT"
 check "パスワードを引数に載せない" not_contains "$(cat "$OP_STUB_LOG")" "$FAKE_SECRET"
-check "--template で渡す" grep -qE 'item create --vault Claude-Automation --template [^ ]+ --format json' "$OP_STUB_LOG"
+check "標準入力（-）で渡す" grep -qE 'item create --vault Claude-Automation --format json -$' "$OP_STUB_LOG"
 check "テンプレートに値が届く" node -e '
   const t=require(process.argv[1]); const f=Object.fromEntries(t.fields.map(x=>[x.id,x.value]));
   process.exit(t.title==="andpad" && t.category==="LOGIN" && f.username===process.argv[2] && f.password===process.argv[3]
@@ -212,25 +260,36 @@ reset_stub
 out="$(OP_STUB_ITEM_EXISTS=1 bash "$S/op-item-add.sh" andpad </dev/null 2>&1)"; rc=$?
 check "既存なら作らずに 0" bash -c '[ "$1" = 0 ] && [[ "$2" == *"既にあります"* ]]' _ "$rc" "$out"
 check "既存なら create を呼ばない" bash -c "! grep -q 'item create' '$OP_STUB_LOG'"
+reset_stub
+out="$(OP_STUB_ITEM_STATE=duplicate bash "$S/op-item-add.sh" andpad </dev/null 2>&1)"; rc=$?
+check "同じ名前が複数なら止めて一覧を出す" bash -c '[ "$1" = 2 ] && [[ "$2" == *"複数あります"* && "$2" == *aaaa1111* && "$2" == *bbbb2222* ]]' _ "$rc" "$out"
+check "同じ名前が複数なら create を呼ばない" bash -c "! grep -q 'item create' '$OP_STUB_LOG'"
 
 echo "== op-env-migrate.sh"
 PROJ="$T/repo"; mkdir -p "$PROJ/andpad-browser"; git -C "$PROJ" init -q
 printf 'node_modules\n' > "$PROJ/.gitignore"
-printf '# AndPad\nANDPAD_EMAIL=%s\nANDPAD_PASSWORD="%s"\nDRY_RUN=1\n' "$FAKE_USER" "$FAKE_SECRET" > "$PROJ/andpad-browser/.env"
+printf '# AndPad メモ: 旧パスワード=%s\nANDPAD_EMAIL=%s\nANDPAD_PASSWORD="%s"\n\nDRY_RUN=1\nSHEET_ID=abc123\nBYPASS_CACHE=1\nSLACK_WEBHOOK=https://hooks.example.com/%s\nDB_DSN=postgres://u:%s@db.example.com/x\nMIRROR=https://u:%s@mirror.example.com/\n' \
+  "$FAKE_SECRET" "$FAKE_USER" "$FAKE_SECRET" "$FAKE_SECRET" "$FAKE_SECRET" "$FAKE_SECRET" > "$PROJ/andpad-browser/.env"
 reset_stub
 out="$(bash "$S/op-env-migrate.sh" "$PROJ/andpad-browser/.env" --yes 2>&1)"; rc=$?
 check "移行は 0" [ "$rc" = 0 ]
-expected="$(printf '%s\n' '# 値は書かない。1Password の「住所」（秘密参照）だけを書く。実行は op-run.sh -- <コマンド>' '# AndPad' \
-  'ANDPAD_EMAIL=op://Claude-Automation/andpad-browser/username' 'ANDPAD_PASSWORD=op://Claude-Automation/andpad-browser/password' 'DRY_RUN=1')"
-check ".env.op は参照と平文の設定だけ" [ "$(cat "$PROJ/andpad-browser/.env.op")" = "$expected" ]
-check ".env.op.example を作る" cmp -s "$PROJ/andpad-browser/.env.op" "$PROJ/andpad-browser/.env.op.example"
+H='# 値は書かない。1Password の「住所」（秘密参照）だけを書く。実行は op-run.sh -- <コマンド>'
+R='op://Claude-Automation/andpad-browser'
+expected="$(printf '%s\n' "$H" "ANDPAD_EMAIL=$R/username" "ANDPAD_PASSWORD=$R/password" '' 'DRY_RUN=1' 'SHEET_ID=abc123' 'BYPASS_CACHE=1' \
+  "SLACK_WEBHOOK=$R/SLACK_WEBHOOK" "DB_DSN=$R/DB_DSN" "MIRROR=$R/MIRROR")"
+check ".env.op は参照と平文の設定だけ（コメントは写さない・空行は残す）" [ "$(cat "$PROJ/andpad-browser/.env.op")" = "$expected" ]
+expected="$(printf '%s\n' "$H" "ANDPAD_EMAIL=$R/username" "ANDPAD_PASSWORD=$R/password" '' 'DRY_RUN=<設定値>' 'SHEET_ID=<設定値>' 'BYPASS_CACHE=<設定値>' \
+  "SLACK_WEBHOOK=$R/SLACK_WEBHOOK" "DB_DSN=$R/DB_DSN" "MIRROR=$R/MIRROR")"
+check ".env.op.example は設定値を <設定値> に伏せる" [ "$(cat "$PROJ/andpad-browser/.env.op.example")" = "$expected" ]
+check ".env.op / 見本に値・コメントが残らない" bash -c "! grep -qF -e '$FAKE_SECRET' -e 'hooks.example.com' -e 'メモ' '$PROJ/andpad-browser/.env.op' '$PROJ/andpad-browser/.env.op.example'"
 check "元の .env を消す" [ ! -e "$PROJ/andpad-browser/.env" ]
 check ".gitignore に .env と .env.op" bash -c "grep -qx .env '$PROJ/.gitignore' && grep -qx .env.op '$PROJ/.gitignore' && grep -qx node_modules '$PROJ/.gitignore'"
 check "値を画面に出さない" not_contains "$out" "$FAKE_SECRET"
 check "値を引数に載せない" not_contains "$(cat "$OP_STUB_LOG")" "$FAKE_SECRET"
 check "テンプレートに username / password で届く" node -e '
   const t=require(process.argv[1]); const f=Object.fromEntries(t.fields.map(x=>[x.id,x.value]));
-  process.exit(t.title==="andpad-browser" && f.username===process.argv[2] && f.password===process.argv[3] && !("dry_run" in f) ? 0 : 1)' \
+  process.exit(t.title==="andpad-browser" && f.username===process.argv[2] && f.password===process.argv[3] && !("dry_run" in f)
+    && !("sheet_id" in f) && !("bypass_cache" in f) && /hooks/.test(f.slack_webhook) && /@db/.test(f.db_dsn) && /@mirror/.test(f.mirror) ? 0 : 1)' \
   "$OP_STUB_DIR/template-1.json" "$FAKE_USER" "$FAKE_SECRET"
 check "一時ファイルを残さない" [ -z "$(ls "$TMPDIR")" ]
 out="$(bash "$S/op-env-migrate.sh" "$PROJ/andpad-browser/.env.op.example" --yes 2>&1)"; rc=$?
@@ -239,12 +298,31 @@ check ".env.op が既にあれば上書きしない" [ "$rc" = 2 ]
 mkdir -p "$PROJ/kintone"; printf 'KINTONE_API_TOKEN=%s\nKINTONE_LOGIN=me\n' "$FAKE_SECRET" > "$PROJ/kintone/.env"
 reset_stub
 out="$(printf 'n\n' | OP_STUB_ITEM_EXISTS=1 bash "$S/op-env-migrate.sh" "$PROJ/kintone/.env" 2>&1)"; rc=$?
-check "既存の項目は edit で足す" bash -c "[ '$rc' = 0 ] && grep -q 'item edit kintone --vault Claude-Automation --template' '$OP_STUB_LOG'"
+check "既存の項目は edit で足す（標準入力で渡す）" bash -c "[ '$rc' = 0 ] && grep -qx 'SA=0 ARGS=--account daimaruenterprise.1password.com item edit kintone --vault Claude-Automation --format json' '$OP_STUB_LOG'"
+check "既存の中身も引数に載せない" bash -c "! grep -q -e '$FAKE_SECRET' -e keep-me '$OP_STUB_LOG'"
 check "既存のフィールドを残して足す" node -e '
   const t=require(process.argv[1]); const ids=t.fields.map(x=>x.id);
   process.exit(ids.includes("notesPlain") && ids.includes("kintone_api_token") && ids.includes("username") ? 0 : 1)' "$OP_STUB_DIR/template-1.json"
 check "N なら .env を残す" [ -f "$PROJ/kintone/.env" ]
 check "TOKEN は KEY 名のフィールドへ" grep -qx 'KINTONE_API_TOKEN=op://Claude-Automation/kintone/KINTONE_API_TOKEN' "$PROJ/kintone/.env.op"
+check "LOGIN は username 欄へ" grep -qx 'KINTONE_LOGIN=op://Claude-Automation/kintone/username' "$PROJ/kintone/.env.op"
+# 既存の項目に値が入っている欄は上書きしない（--overwrite でだけ上書き）
+mkdir -p "$PROJ/garoon"; printf 'GAROON_USER=new-user\nGAROON_PASSWORD=%s\n' "$FAKE_SECRET" > "$PROJ/garoon/.env"
+reset_stub
+out="$(OP_STUB_ITEM_EXISTS=1 OP_STUB_EXISTING_USER=old-user bash "$S/op-env-migrate.sh" "$PROJ/garoon/.env" --yes 2>&1)"; rc=$?
+check "既存の値があれば止めてキー名だけ出す" bash -c '[ "$1" = 2 ] && [[ "$2" == *GAROON_USER* && "$2" == *--overwrite* && "$2" != *old-user* && "$2" != *new-user* ]]' _ "$rc" "$out"
+check "止めたときは edit を呼ばず .env も .env.op もそのまま" bash -c "! grep -q 'item edit' '$OP_STUB_LOG' && [ -f '$PROJ/garoon/.env' ] && [ ! -e '$PROJ/garoon/.env.op' ]"
+reset_stub
+out="$(OP_STUB_ITEM_EXISTS=1 OP_STUB_EXISTING_USER=old-user bash "$S/op-env-migrate.sh" "$PROJ/garoon/.env" --yes --overwrite 2>&1)"; rc=$?
+check "--overwrite なら上書きして進む" bash -c "[ '$rc' = 0 ] && grep -q 'item edit garoon' '$OP_STUB_LOG'"
+check "--overwrite: 新しい値が届く" node -e '
+  const t=require(process.argv[1]); const f=Object.fromEntries(t.fields.map(x=>[x.id,x.value]));
+  process.exit(f.username==="new-user" && f.password===process.argv[2] ? 0 : 1)' "$OP_STUB_DIR/template-1.json" "$FAKE_SECRET"
+# 同じ名前の項目が複数あれば止める
+mkdir -p "$PROJ/dup"; printf 'DUP_PASSWORD=%s\n' "$FAKE_SECRET" > "$PROJ/dup/.env"
+out="$(OP_STUB_ITEM_STATE=duplicate bash "$S/op-env-migrate.sh" "$PROJ/dup/.env" --yes 2>&1)"; rc=$?
+check "移行: 同じ名前が複数なら止める" bash -c '[ "$1" = 2 ] && [[ "$2" == *"複数あります"* ]] && [ -f "$3" ]' _ "$rc" "$out" "$PROJ/dup/.env"
+check "一時ファイルを残さない（移行の後）" [ -z "$(ls "$TMPDIR")" ]
 
 echo ""
 echo "結果: ok=$PASS_N fail=$FAIL_N"

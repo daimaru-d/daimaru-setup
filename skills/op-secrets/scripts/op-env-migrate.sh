@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # op-env-migrate.sh — 平文の .env を 1Password へ移し、参照だけの .env.op に置き換える
-#   使い方: op-env-migrate.sh <path/to/.env> [--item NAME] [--vault V] [--yes]
+#   使い方: op-env-migrate.sh <path/to/.env> [--item NAME] [--vault V] [--yes] [--overwrite]
 #   例:     op-env-migrate.sh andpad-browser/.env
 # 流れ: .env を読む（画面には出さない）→ パスワード・ID などを 1Password の 1 項目にまとめる
 #       → .env.op（参照だけ）を書く → .gitignore を整える → 元の .env を確認してから消す
-# 値は 0600 の一時ファイル（--template）で op に渡す。引数・画面・ログには出さない
+# 値はパイプ（op item create - / op item edit の標準入力）で op に渡す。引数・一時ファイル・画面・ログには出さない
+# 既存の項目に値が入っている欄は上書きしない（--overwrite を付けたときだけ上書き）
+# コメント行は写さない。.env.op.example には秘密でない設定も <設定値> に伏せて書く
 # =============================================================================
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,16 +16,17 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ops_load_config
 
 usage(){
-  echo "使い方: op-env-migrate.sh <path/to/.env> [--item NAME] [--vault V] [--yes]" >&2
+  echo "使い方: op-env-migrate.sh <path/to/.env> [--item NAME] [--vault V] [--yes] [--overwrite]" >&2
   exit 2
 }
 
-src=""; item=""; vault="$OP_VAULT"; yes=0
+src=""; item=""; vault="$OP_VAULT"; yes=0; overwrite=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --item) [ $# -ge 2 ] || usage; item="$2"; shift 2;;
     --vault) [ $# -ge 2 ] || usage; vault="$2"; shift 2;;
     --yes|-y) yes=1; shift;;
+    --overwrite) overwrite=1; shift;;
     -h|--help) usage;;
     -*) err "知らないオプション: $1"; usage;;
     *) if [ -z "$src" ]; then src="$1"; shift; else usage; fi;;
@@ -57,61 +60,76 @@ if ! ops_find_op; then
   exit 2
 fi
 
+# 書き出し先（.env.op・見本・キー名の一覧。どれも値は含まない）
 tmpd="$(mktemp -d "${TMPDIR:-/tmp}/op-env-migrate.XXXXXX")"
-chmod 700 "$tmpd"
-# 一時ファイルは中身を空にしてから消す
-cleanup(){
-  local f
-  if [ -n "${tmpd:-}" ] && [ -d "$tmpd" ]; then
-    for f in "$tmpd"/*; do if [ -f "$f" ]; then : > "$f"; fi; done
-    rm -rf "$tmpd"
-  fi
-}
-trap cleanup EXIT INT TERM
+trap 'rm -rf "$tmpd"' EXIT HUP INT TERM
 
-# 既にある項目なら、その中身に足す（取り出した中身は一時ファイルにだけ置く）
+# 既にある項目なら、その中身に足す（今の値ごと読む必要があるので --reveal。読んだ中身は変数にだけ持つ）
 mode=create
-existing_args=()
-if ops_op item get "$item" --vault "$vault" --format json >/dev/null 2>&1; then
-  # 足すには今の値ごと読む必要がある（--reveal）。読めなければ壊さないよう止める
-  if ops_op item get "$item" --vault "$vault" --reveal --format json > "$tmpd/existing.json" 2>/dev/null; then
+existing=""
+state="$(ops_item_state "$item" "$vault")"
+case "$state" in
+  exists)
     mode=edit
-    existing_args=(--existing "$tmpd/existing.json")
-  else
-    err "項目「${item}」は既にありますが、中身を読み込めませんでした。--item で別の名前を指定してください"
-    exit 2
-  fi
-fi
+    if ! existing="$(ops_op item get "$item" --vault "$vault" --reveal --format json 2>/dev/null)"; then
+      existing=""
+      err "項目「${item}」は既にありますが、中身を読み込めませんでした。--item で別の名前を指定してください"
+      exit 2
+    fi;;
+  duplicate)
+    err "保管庫「${vault}」に「${item}」という名前の項目が複数あります。1Password アプリで 1 つにまとめるか、--item で別の名前を指定してください"
+    ops_show_duplicates "$item" "$vault"
+    exit 2;;
+  error)
+    err "1Password に問い合わせできませんでした（サインインと保管庫を op-doctor.sh で確認してください）"
+    exit 2;;
+esac
 
 say "==> $envfile を 1Password の保管庫「${vault}」の項目「${item}」へ移します"
-summary="$(node "$HERE/op-template.js" env --env "$envfile" --vault "$vault" --item "$item" \
-  --out-template "$tmpd/item.json" --out-envop "$tmpd/env.op" ${existing_args[@]+"${existing_args[@]}"})" || {
-  err "移せませんでした（上の理由を確認してください）"; exit 2; }
-if [ -f "$tmpd/existing.json" ]; then : > "$tmpd/existing.json"; fi
+tpl_args=(env --env "$envfile" --vault "$vault" --item "$item"
+  --out-envop "$tmpd/env.op" --out-example "$tmpd/env.op.example" --out-summary "$tmpd/summary")
+[ "$mode" = edit ] && tpl_args+=(--existing -)
+[ "$overwrite" = 1 ] && tpl_args+=(--overwrite)
+rc=0
+tmpl="$(printf '%s' "$existing" | node "$HERE/op-template.js" "${tpl_args[@]}" 2>"$tmpd/err")" || rc=$?
+existing=""
+if [ "$rc" = 5 ]; then
+  tmpl=""
+  keys="$(awk -F '\t' '$1 == "CONFLICT" { print $2 }' "$tmpd/err")"
+  err "項目「${item}」の次の欄には既に値が入っているため、上書きせずに止めました: ${keys}"
+  hint "1Password アプリで中身を確かめ、上書きしてよければ --overwrite を付けてやり直してください"
+  exit 2
+elif [ "$rc" != 0 ]; then
+  tmpl=""
+  cat "$tmpd/err" >&2
+  err "移せませんでした（上の理由を確認してください）"
+  exit 2
+fi
 
 # 1Password へ（出力には中身が含まれるので表示しない）
 if [ "$mode" = edit ]; then
-  ops_op item edit "$item" --vault "$vault" --template "$tmpd/item.json" --format json >/dev/null \
-    || { err "既存の項目「${item}」を更新できませんでした"; exit 2; }
+  printf '%s' "$tmpl" | ops_op item edit "$item" --vault "$vault" --format json >/dev/null \
+    || { tmpl=""; err "既存の項目「${item}」を更新できませんでした"; exit 2; }
+  tmpl=""
   ok "既存の項目「${item}」に値を足しました"
 else
-  ops_op item create --vault "$vault" --template "$tmpd/item.json" --format json >/dev/null \
-    || { err "項目「${item}」を作れませんでした（保管庫「${vault}」が見えるか op-doctor.sh で確認）"; exit 2; }
+  printf '%s' "$tmpl" | ops_op item create --vault "$vault" --format json - >/dev/null \
+    || { tmpl=""; err "項目「${item}」を作れませんでした（保管庫「${vault}」が見えるか op-doctor.sh で確認）"; exit 2; }
+  tmpl=""
   ok "項目「${item}」を作りました"
 fi
-: > "$tmpd/item.json"
 
 # キー名と行き先だけ表示（値は出さない）
-printf '%s\n' "$summary" | while IFS="$(printf '\t')" read -r kind key field; do
+while IFS="$(printf '\t')" read -r kind key field; do
   case "$kind" in
     secret) ok "$key → 1Password（$item / ${field}）";;
     plain)  ok "$key → .env.op にそのまま（秘密ではない設定）";;
   esac
-done
+done < "$tmpd/summary"
 
 cp "$tmpd/env.op" "$envop"
 ok "$envop を書きました（参照だけ）"
-if [ ! -e "$example" ]; then cp "$tmpd/env.op" "$example"; ok "$example を作りました（見本）"; fi
+if [ ! -e "$example" ]; then cp "$tmpd/env.op.example" "$example"; ok "$example を作りました（見本。設定値は <設定値> に伏せています）"; fi
 
 # .gitignore に .env と .env.op を足す（git の中ならリポジトリの一番上に）
 root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || echo "$dir")"

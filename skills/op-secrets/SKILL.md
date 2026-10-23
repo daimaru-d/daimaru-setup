@@ -19,6 +19,24 @@ description: パスワード・ログイン情報・ID・トークン・.env・1
 - **パスワードの入力は人に頼む。** ターミナルの表示されない入力欄（`op-item-add.sh` が聞く）か、1Password アプリで入れてもらう。パスワードをコマンドの引数やチャットで受け取らない。もしチャットに貼られたら、使わずに「1Password アプリで入れてください」と伝える。
 - **項目名は英小文字・数字・ハイフンだけ**（例: `andpad`、`kintone-keiri`）。日本語や大文字は住所で読めなくなります。
 - **保管庫は既定で `Claude-Automation`。** 個人だけで使うものは各自の `Private`（`--vault Private`）。
+- **`op-run.sh -- sh -c` / `bash -c` / `node -e` / `python -c` を使わない。** その場で書いたスクリプトは値を表示できてしまうので、スクリプトはファイルにして渡す（`op-run.sh` も拒否します）。
+- **環境変数を表示・変形・書き出すスクリプトを作らない。** たとえば `process.env` を console に出す、base64 にする、ファイルに書く、といった処理は書かない。
+- **`.env.op` 以外の `.env*` を読まない・作らない。** 見本の `.env.example` / `.env.op.example` は読んでよい。
+- **無人実行のトークンは受け取れない。** トークンを登録するときは、下の「頼む言葉」の表にある 1 行を人に示し、人が自分の PC で実行する。
+
+## 頼む言葉 → やること
+
+利用者が次のように頼んだら、Claude は右の操作をします。
+
+| 頼む言葉 | やること |
+|:--|:--|
+| 「パスワードの金庫を診断して」 | `bash ~/.claude/skills/op-secrets/scripts/op-doctor.sh` を実行し、✗ の項目の直し方を伝える |
+| 「この .env を 1Password に移して」 | `bash ~/.claude/skills/op-secrets/scripts/op-env-migrate.sh <.envの場所>` |
+| 「○○のログイン情報を登録して」 | `bash ~/.claude/skills/op-secrets/scripts/op-item-add.sh <項目名> --url <URL> --username <ID>`（パスワードは人が 1Password アプリで入れる） |
+| 「○○を動かして」 | `bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- <コマンド>` |
+| 「サービスアカウントのトークンを登録して」 | Claude は受け取れないので、次の 1 行を人に示す。Windows は PowerShell で `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.ps1 \| iex`、Mac はターミナルで `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.sh \| bash` |
+| 「この PC を無人実行に切り替えて」 | `~/.config/daimaru-op/config` の `OP_SA_MODE` を `1` にする（行が無ければ `OP_SA_MODE=1` を足す） |
+| 「無人実行を戻して」 | 同じ行を `OP_SA_MODE=0` にする |
 
 ## 3. 使い方
 
@@ -31,7 +49,7 @@ description: パスワード・ログイン情報・ID・トークン・.env・1
 | パスワードを自動で作って登録する | `bash ~/.claude/skills/op-secrets/scripts/op-item-add.sh <項目名> --url <URL> --username <ID> --generate` |
 | 既存の `.env` を金庫へ移す | `bash ~/.claude/skills/op-secrets/scripts/op-env-migrate.sh <.envの場所>` |
 | 自動化を動かす | `bash ~/.claude/skills/op-secrets/scripts/op-run.sh -- <コマンド>` |
-| 無人実行の準備（管理者からトークンを受け取った人） | `bash ~/.claude/skills/op-secrets/scripts/op-sa-token.sh set` のあと、`~/.config/daimaru-op/config` の `OP_SA_MODE=1` |
+| 無人実行の準備（トークンは人が入れる） | 上の「頼む言葉」の表の sa-token の 1 行を人が実行 → `~/.config/daimaru-op/config` の `OP_SA_MODE=1` |
 | 無人実行のトークンがあるか確認 | `bash ~/.claude/skills/op-secrets/scripts/op-sa-token.sh status` |
 
 - `op-item-add.sh` は、最後に `.env.op` に貼る行を表示します（例: `ANDPAD_EMAIL=op://Claude-Automation/andpad/username`）。これは住所なので貼っても安全です。
@@ -59,7 +77,7 @@ description: パスワード・ログイン情報・ID・トークン・.env・1
 | 4 | 保管庫 `Claude-Automation` が見えない | 1Password の管理者に保管庫の共有を依頼 |
 | 5 | Claude Code の見張り・禁止リストが無い | `bash ~/.claude/skills/op-secrets/scripts/install.sh` をもう一度 |
 | 6 | 平文の `.env` がある（注意） | 表示された `op-env-migrate.sh` のコマンドで移す |
-| 7 | 無人実行なのにトークンが無い | `op-sa-token.sh set`（トークンは管理者から受け取る） |
+| 7 | 無人実行なのにトークンが無い | 管理者が sa-token の 1 行（「頼む言葉」の表）で入れる |
 
 - Windows では Claude Code の Bash は Git Bash です。コマンドはこの資料のまま動きます。組織の設定で `claude` が動かない PC は `claude.cmd` で起動します。
 - 「invalid character in secret reference」と出たら、項目名か保管庫名に日本語・空白が入っています。英小文字・数字・ハイフンの名前で作り直します。

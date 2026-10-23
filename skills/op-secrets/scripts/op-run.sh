@@ -33,10 +33,31 @@ while [ $# -gt 0 ]; do
 done
 [ $# -gt 0 ] || usage
 
-# 1) 注入した値をまるごと表示するコマンドは動かさない
-case "$1" in
+# 1) 注入した値をまるごと表示するコマンドと、その場のスクリプト（sh -c / node -e など）は動かさない
+first="${1##*/}"; first="${first%.exe}"
+case "$first" in
   printenv) err "printenv は注入した値を表示するため、op-run.sh では動かせません"; exit 2;;
-  env|set|export) if [ $# -eq 1 ]; then err "$1 だけを動かすと注入した値がすべて表示されるため、動かせません"; exit 2; fi;;
+  set|export) if [ $# -eq 1 ]; then err "$first だけを動かすと注入した値がすべて表示されるため、動かせません"; exit 2; fi;;
+  env)
+    # env の後に動かすコマンドが無ければ（オプションと代入だけなら）一覧表示になる
+    shift_n=1; has_cmd=0; skip_next=0
+    for a in "$@"; do
+      if [ "$shift_n" = 1 ]; then shift_n=0; continue; fi
+      if [ "$skip_next" = 1 ]; then skip_next=0; continue; fi
+      case "$a" in
+        -u|--unset|-C|--chdir|-S|--split-string) skip_next=1;;
+        -*|*=*) ;;
+        *) has_cmd=1; break;;
+      esac
+    done
+    if [ "$has_cmd" = 0 ]; then err "env だけを動かすと注入した値がすべて表示されるため、動かせません"; exit 2; fi;;
+  sh|bash|zsh|dash|node|python|python3|pwsh|powershell)
+    case "${2:-}" in
+      -c|-e|-p|--eval|--print|-Command|-command)
+        err "op-run.sh -- の後に、その場のスクリプト（$first ${2}）は渡せません。スクリプトはファイルにして渡してください"
+        hint "例: op-run.sh -- $first ./run.${first%%[0-9]*}"
+        exit 2;;
+    esac;;
 esac
 
 # 2) env ファイルの検証（値は表示しない。行番号だけ出す）
@@ -82,11 +103,20 @@ if [ "$use_sa" = 1 ] && [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
   # shellcheck source=op-sa-token.sh
   . "$HERE/op-sa-token.sh"
   if ! ops_sa_load; then
-    err "サービスアカウントのトークンが保管されていません（op-sa-token.sh set で保管）"
+    err "サービスアカウントのトークンが保管されていません。管理者がこの PC で次の 1 行を実行して入れます"
+    hint "Windows（PowerShell）: irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.ps1 | iex"
+    hint "Mac（ターミナル）    : curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/sa-token.sh | bash"
     exit 2
   fi
 fi
 ops_acct_args
 
+# OP_ACCOUNT は op 自身も読むため、--account で渡した後は環境から外す（サービスアカウントと混ざらないように）
+unset OP_ACCOUNT
+
 # 4) 実行（op run は既定で出力中の秘密を伏せ字にする）
+if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+  # サービスアカウントのトークンは op だけが使う。動かすコマンドには渡さない
+  exec "$OP_BIN" run --env-file "$env_file" --no-masking=false -- env -u OP_SERVICE_ACCOUNT_TOKEN "$@"
+fi
 exec "$OP_BIN" ${OPS_ACCT[@]+"${OPS_ACCT[@]}"} run --env-file "$env_file" --no-masking=false -- "$@"
