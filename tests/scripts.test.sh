@@ -28,6 +28,7 @@ unset OP_ACCOUNT OP_VAULT OP_ENV_FILE OP_SA_MODE OP_SERVICE_ACCOUNT_TOKEN OP_STU
 FAKE_SECRET='FAKE-S3cr3t-Value-for-test'
 FAKE_USER='someone@example.com'
 reset_stub(){ : > "$OP_STUB_LOG"; rm -f "$OP_STUB_DIR"/template-*.json; }
+tmp_clean(){ [ -z "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 ! -name xcrun_db -print -quit)" ]; }
 
 echo "== 構文"
 SH_FILES=("$S"/*.sh "$ROOT/scripts/op/setup.sh" "$ROOT/scripts/op/sa-token.sh" "$ROOT/tests/scripts.test.sh" "$ROOT/tests/stubs/op" "$ROOT/setup.sh")
@@ -248,7 +249,7 @@ check "テンプレートに値が届く" node -e '
   const t=require(process.argv[1]); const f=Object.fromEntries(t.fields.map(x=>[x.id,x.value]));
   process.exit(t.title==="andpad" && t.category==="LOGIN" && f.username===process.argv[2] && f.password===process.argv[3]
     && t.urls[0].href==="https://andpad.jp" ? 0 : 1)' "$OP_STUB_DIR/template-1.json" "$FAKE_USER" "$FAKE_SECRET"
-check "一時ファイルを残さない" [ -z "$(ls "$TMPDIR")" ]
+check "一時ファイルを残さない" tmp_clean
 reset_stub
 out="$(printf '\n\n' | bash "$S/op-item-add.sh" kintone-keiri --totp 2>&1)"; rc=$?
 check "空のパスワードでも作る（アプリで後から）" bash -c '[ "$1" = 0 ] && [[ "$2" == *"パスワード欄は空"* ]]' _ "$rc" "$out"
@@ -291,7 +292,7 @@ check "テンプレートに username / password で届く" node -e '
   process.exit(t.title==="andpad-browser" && f.username===process.argv[2] && f.password===process.argv[3] && !("dry_run" in f)
     && !("sheet_id" in f) && !("bypass_cache" in f) && /hooks/.test(f.slack_webhook) && /@db/.test(f.db_dsn) && /@mirror/.test(f.mirror) ? 0 : 1)' \
   "$OP_STUB_DIR/template-1.json" "$FAKE_USER" "$FAKE_SECRET"
-check "一時ファイルを残さない" [ -z "$(ls "$TMPDIR")" ]
+check "一時ファイルを残さない" tmp_clean
 out="$(bash "$S/op-env-migrate.sh" "$PROJ/andpad-browser/.env.op.example" --yes 2>&1)"; rc=$?
 check ".env.op が既にあれば上書きしない" [ "$rc" = 2 ]
 # 既存の項目へ足す（op item edit）・確認で N なら .env を残す
@@ -322,7 +323,7 @@ check "--overwrite: 新しい値が届く" node -e '
 mkdir -p "$PROJ/dup"; printf 'DUP_PASSWORD=%s\n' "$FAKE_SECRET" > "$PROJ/dup/.env"
 out="$(OP_STUB_ITEM_STATE=duplicate bash "$S/op-env-migrate.sh" "$PROJ/dup/.env" --yes 2>&1)"; rc=$?
 check "移行: 同じ名前が複数なら止める" bash -c '[ "$1" = 2 ] && [[ "$2" == *"複数あります"* ]] && [ -f "$3" ]' _ "$rc" "$out" "$PROJ/dup/.env"
-check "一時ファイルを残さない（移行の後）" [ -z "$(ls "$TMPDIR")" ]
+check "一時ファイルを残さない（移行の後）" tmp_clean
 
 echo ""
 echo "結果: ok=$PASS_N fail=$FAIL_N"

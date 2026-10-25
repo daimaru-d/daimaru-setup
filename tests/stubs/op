@@ -27,6 +27,7 @@ case "$1" in
 esac
 
 case "$sub $sub2" in
+  "read "*) [ -n "${OP_STUB_READ_VALUE:-}" ] || exit 1; printf '%s\n' "$OP_STUB_READ_VALUE"; exit 0;;
   "whoami "*) exit "${OP_STUB_WHOAMI_RC:-0}";;
   "account list") printf 'URL                                EMAIL                 USER ID\ndaimaruenterprise.1password.com    someone@example.com   XXXXXXXX\n'; exit 0;;
   "vault get") [ "${OP_STUB_VAULT_RC:-0}" = 0 ] || exit "${OP_STUB_VAULT_RC}"; echo '{"name":"Claude-Automation"}'; exit 0;;
