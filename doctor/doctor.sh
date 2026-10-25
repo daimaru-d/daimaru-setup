@@ -3,10 +3,10 @@
 set -uo pipefail
 export PATH="$HOME/.local/bin:$HOME/google-cloud-sdk/bin:$PATH"
 D_SOURCE="${BASH_SOURCE[0]:-}"
-if [ -n "$D_SOURCE" ]; then
+if [ -n "$D_SOURCE" ] && [ -f "$D_SOURCE" ]; then
   D_HERE="$(cd "$(dirname "$D_SOURCE")/.." 2>/dev/null && pwd || pwd)"
 else
-  D_HERE="$PWD"
+  D_HERE=''
 fi
 D_ROOT="${DAIMARU_SETUP_ROOT:-$D_HERE}"
 D_BASE="${DAIMARU_SETUP_BASE:-https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main}"
@@ -90,7 +90,7 @@ if needs gws; then
     D_GWS_ERR="$(mktemp "${TMPDIR:-/tmp}/daimaru-gws.XXXXXX")"
     if gws drive files list --params '{"pageSize":1,"fields":"files(id)"}' >/dev/null 2>"$D_GWS_ERR"; then pass_item 'gws: Drive 実 API 成功'
     else
-      fail_item gws-api 'gws: Drive 実 API に失敗' 'gws auth login -s drive,sheets,gmail を実行'
+      fail_item gws-api 'gws: Drive 実 API に失敗' "gws auth login -s $GWS_SCOPES を実行"
       if grep -q '401' "$D_GWS_ERR"; then hint "401: ${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$HOME/.config/gws}/token_cache.json を退避して再ログイン"; fi
     fi
     rm -f "$D_GWS_ERR"

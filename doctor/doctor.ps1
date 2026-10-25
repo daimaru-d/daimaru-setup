@@ -1,4 +1,6 @@
 # PowerShell 5.1 doctor。setup.ps1 からも単独でも実行できる。
+$ErrorActionPreference = 'Continue'
+if (-not $env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR) { $env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR=Join-Path $HOME '.config\gws' }
 $script:DoctorTemp=$null
 try {
 $script:DoctorBase = if ($env:DAIMARU_SETUP_BASE) { $env:DAIMARU_SETUP_BASE.TrimEnd('/') } else { 'https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main' }
@@ -34,10 +36,10 @@ if ($policy -eq 'Restricted') { Warn '実行ポリシー: Restricted'; Hint '管
 foreach ($tool in @('claude','node','git','gh','gws','code','op')) {
   $needed=($tool -in @('claude','node','git','gh')) -or (Needs $(if ($tool -eq 'code') { 'vscode' } else { $tool }))
   if (-not $needed) { continue }
-  if ($(if ($tool -eq 'claude') { Have claude.cmd } else { Have $tool })) { Ok "PATH: $tool" }
+  if ($(if ($tool -eq 'claude') { Have-Cli claude } else { Have $tool })) { Ok "PATH: $tool" }
   else { Doctor-Fail $(if ($tool -eq 'code') { 'vscode' } else { $tool }) "$tool が見つかりません" "winget / npm で $tool を導入してください" }
 }
-if (Have claude.cmd) { Invoke-Cli claude @('auth','status') 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { Ok 'Claude: ログイン済み' } else { Warn 'Claude: ログイン状態を確認できません'; Hint 'claude.cmd を起動してログインしてください' } }
+if (Have-Cli claude) { Invoke-Cli claude @('auth','status') 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { Ok 'Claude: ログイン済み' } else { Warn 'Claude: ログイン状態を確認できません'; Hint 'claude を起動してログインしてください' } }
 $hub=Join-Path $HOME 'daimaru-skills'
 if (-not (Test-Path (Join-Path $hub '.git'))) { Doctor-Fail 'hub' 'daimaru-skills が見つかりません' 'セットアップをもう一度実行してください' }
 if ($env:DAIMARU_DOCTOR_SKIP_NETWORK -eq '1') { Doctor-Skip 'GitHub 権限'; Doctor-Skip 'daimaru-skills 更新' }
@@ -61,7 +63,7 @@ if (Needs 'gws') {
     Invoke-Gws @('drive','files','list') 2>$errFile | Out-Null
     $rc=$LASTEXITCODE
     if ($rc -eq 0) { Ok 'gws: Drive 実 API 成功' }
-    else { Doctor-Fail 'gws-api' 'gws: Drive 実 API に失敗' 'gws auth login -s drive,sheets,gmail を実行'; if ((Get-Content $errFile -Raw -ErrorAction SilentlyContinue) -match '401') { Hint '401: ~/.config/gws/token_cache.json を退避して再ログインしてください' } }
+    else { Doctor-Fail 'gws-api' 'gws: Drive 実 API に失敗' "gws auth login -s $($script:KProfile.GWS_SCOPES) を実行"; if ((Get-Content $errFile -Raw -ErrorAction SilentlyContinue) -match '401') { Hint '401: ~/.config/gws/token_cache.json を退避して再ログインしてください' } }
     Remove-Item $errFile -ErrorAction SilentlyContinue
   } else { Doctor-Fail 'gws-api' 'gws: 実 API を確認できません' 'npm.cmd i -g @googleworkspace/cli' }
 }
@@ -96,7 +98,7 @@ if (Needs 'gcloud') {
 }
 foreach ($dir in @((Join-Path $HOME 'Downloads'),(Join-Path $HOME 'Desktop'))) {
   if (-not (Test-Path $dir)) { continue }
-  Get-ChildItem $dir -Recurse -Depth 1 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'client_secret*.json' -or $_.Name -eq '.env' } | ForEach-Object { Warn "機密ファイル候補: $($_.FullName)"; Hint '不要なら安全な場所へ移し、元のファイルを削除してください' }
+  Get-ChildItem $dir -Recurse -Depth 1 -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'client_secret*.json' -or $_.Name -eq '.env' } | ForEach-Object { Warn "機密ファイル候補: $($_.FullName)"; Hint '不要なら安全な場所へ移し、元のファイルを削除してください' }
 }
 if ($script:Missing.Count -eq 0) { Write-Host 'DAIMARU_DOCTOR: PASS'; if ($PSCommandPath) { exit 0 } else { return } }
 Write-Host ('DAIMARU_DOCTOR: FAIL missing=' + ($script:Missing -join ','))

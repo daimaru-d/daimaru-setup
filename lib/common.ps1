@@ -27,10 +27,10 @@ function Is-DryRun { return ($env:DAIMARU_DRY_RUN -eq '1') }
 function Is-Update { return ($env:DAIMARU_UPDATE -eq '1') }
 function Valid-Role([string]$Role) { return @('base','sekkei','togo','yochi','somu-keiri').Contains($Role) }
 function Get-StateRole {
-  try { if (-not (Test-Path $script:KState)) { return $null }; return (Get-Content $script:KState -Raw | ConvertFrom-Json).role } catch { return $null }
+  try { if (-not (Test-Path $script:KState)) { return $null }; return (Get-Content $script:KState -Raw -Encoding UTF8 | ConvertFrom-Json).role } catch { return $null }
 }
 function Get-StateScopes {
-  try { if (-not (Test-Path $script:KState)) { return $null }; return (Get-Content $script:KState -Raw | ConvertFrom-Json).gwsScopes } catch { return $null }
+  try { if (-not (Test-Path $script:KState)) { return $null }; return (Get-Content $script:KState -Raw -Encoding UTF8 | ConvertFrom-Json).gwsScopes } catch { return $null }
 }
 function Test-Scopes([string]$Granted,[string]$Required) {
   foreach ($scope in ($Required -split ',')) { if ($scope -and @($Granted -split ',') -notcontains $scope) { return $false } }
@@ -40,7 +40,7 @@ function Set-StateScopes([string]$Scopes) {
   if (Is-DryRun) { return }
   $dir=Split-Path $script:KState -Parent
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  try { if (Test-Path $script:KState) { $s=Get-Content $script:KState -Raw | ConvertFrom-Json } else { $s=$null } } catch { $s=$null }
+  try { if (Test-Path $script:KState) { $s=Get-Content $script:KState -Raw -Encoding UTF8 | ConvertFrom-Json } else { $s=$null } } catch { $s=$null }
   if (-not $s) { $s=[pscustomobject]@{role=$script:KRole;steps=[pscustomobject]@{};lastRun=''} }
   if ($s.role -ne $script:KRole) { $s.role=$script:KRole; $s.steps=[pscustomobject]@{} }
   $s | Add-Member -NotePropertyName gwsScopes -NotePropertyValue $Scopes -Force
@@ -78,7 +78,7 @@ function Load-Profile([string]$Path) {
 }
 function Needs([string]$Name) { return @(($script:KProfile.TOOLS -split ' ') | Where-Object { $_ -eq $Name }).Count -gt 0 }
 function Get-StateStep([string]$Name) {
-  try { if (-not (Test-Path $script:KState)) { return $null }; $s = Get-Content $script:KState -Raw -ErrorAction Stop | ConvertFrom-Json; if ($s.role -eq $script:KRole) { return $s.steps.$Name } } catch { }
+  try { if (-not (Test-Path $script:KState)) { return $null }; $s = Get-Content $script:KState -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json; if ($s.role -eq $script:KRole) { return $s.steps.$Name } } catch { }
   return $null
 }
 function Set-StateStep([string]$Name,[string]$Result) {
@@ -86,13 +86,28 @@ function Set-StateStep([string]$Name,[string]$Result) {
   $dir = Split-Path $script:KState -Parent
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
   $s = $null
-  try { if (Test-Path $script:KState) { $s = Get-Content $script:KState -Raw -ErrorAction Stop | ConvertFrom-Json } } catch { }
+  try { if (Test-Path $script:KState) { $s = Get-Content $script:KState -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json } } catch { }
   if (-not $s) { $s = [pscustomobject]@{role=$script:KRole;steps=[pscustomobject]@{};lastRun=''} }
   elseif ($s.role -ne $script:KRole) { $s.role=$script:KRole; $s.steps=[pscustomobject]@{} }
   $s.steps | Add-Member -NotePropertyName $Name -NotePropertyValue $Result -Force
   $s.lastRun = [DateTime]::UtcNow.ToString('o')
   $json = $s | ConvertTo-Json -Depth 8
   [IO.File]::WriteAllText($script:KState,$json + "`n",(New-Object Text.UTF8Encoding($false)))
+}
+function Test-NpmCi([string]$Repo) {
+  if (-not (Test-Path $Repo)) { return $true }
+  $lock=Join-Path $Repo 'package-lock.json'
+  if (-not (Test-Path (Join-Path $Repo 'node_modules\pg')) -or -not (Test-Path $lock)) { return $false }
+  return ((Get-StateStep 'npm-lock-hash') -eq (Get-FileHash $lock -Algorithm SHA256).Hash)
+}
+function Install-NpmCi([string]$Repo) {
+  $lock=Join-Path $Repo 'package-lock.json'
+  if (-not (Test-Path $lock)) { return $false }
+  Push-Location $Repo
+  try { Invoke-Cli npm @('ci') | Out-Null; $rc=$LASTEXITCODE } finally { Pop-Location }
+  if ($rc -ne 0) { return $false }
+  Set-StateStep 'npm-lock-hash' (Get-FileHash $lock -Algorithm SHA256).Hash
+  return $true
 }
 function Run-Step([string]$Name,[scriptblock]$Check,[scriptblock]$Action) {
   if (Is-DryRun) { Say "予定: $Name"; return }
@@ -117,15 +132,33 @@ function Refresh-Path {
   $user=[Environment]::GetEnvironmentVariable('Path','User')
   $env:Path = @($machine,$user,$env:Path) -ne '' -join ';'
 }
+function Resolve-Cli([string]$Name) {
+  $cmd = Get-Command "$Name.exe","$Name.cmd" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $cmd) { $cmd = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1 }
+  return $cmd
+}
+function Have-Cli([string]$Name) { return [bool](Resolve-Cli $Name) }
 function Invoke-Cli([string]$Name,[string[]]$CliArgs) {
-  $cmd = Get-Command "$Name.cmd","$Name.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $cmd) { $cmd = Get-Command $Name -ErrorAction Stop }
+  $cmd = Resolve-Cli $Name
+  if (-not $cmd) { throw "$Name が見つかりません" }
   & $cmd.Source @CliArgs
 }
 function Invoke-Gws([string[]]$GwsArgs) {
   $params='{"pageSize":1,"fields":"files(id)"}'
   if ($PSVersionTable.PSVersion.Major -lt 7) { $params=$params.Replace('"','\"') }
   Invoke-Cli gws ($GwsArgs + @('--params',$params))
+}
+function Test-OpReady {
+  if (-not (Have-Cli 'op')) { return $false }
+  $doctor=Join-Path $HOME '.claude\skills\op-secrets\scripts\op-doctor.sh'
+  $bash=Get-GitBash
+  if (-not $bash) { $bashCmd=Get-Command bash -ErrorAction SilentlyContinue | Select-Object -First 1; if ($bashCmd) { $bash=$bashCmd.Source } }
+  if ((Test-Path $doctor) -and $bash) {
+    $out=@(& $bash ($doctor -replace '\\','/') 2>$null)
+    return ($LASTEXITCODE -eq 0 -and $out.Count -gt 0 -and $out[-1] -eq 'OP_DOCTOR: PASS')
+  }
+  Invoke-Cli op @('whoami') 2>$null | Out-Null
+  return ($LASTEXITCODE -eq 0)
 }
 function Get-GitBash {
   $git=Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -197,8 +230,9 @@ function Set-PrivateAcl([string]$Path,[bool]$Directory) {
   } catch { return $false }
 }
 function Get-RoleWorkspace([string]$Hub,[string]$Role) {
-  $workspace=Join-Path (Join-Path $Hub '.workspaces') $Role
+  $workspace=Join-Path (Join-Path (Join-Path $env:APPDATA 'daimaru-setup') 'workspaces') $Role
   if ((Test-Path (Join-Path $Hub "profiles\$Role.json")) -and (Test-Path (Join-Path $workspace '.ready'))) { return $workspace }
+  if (Test-Path (Join-Path $Hub "profiles\$Role.json")) { return $null }
   return $Hub
 }
 function Clear-GwsTemps {
@@ -208,7 +242,7 @@ function Clear-GwsTemps {
 function Copy-RoleSkills([string]$Hub,[string]$Role) {
   $file = Join-Path $Hub "profiles\$Role.json"
   if (-not (Test-Path $file)) { return $true }
-  $workspace=Join-Path (Join-Path $Hub '.workspaces') $Role
+  $workspace=Join-Path (Join-Path (Join-Path $env:APPDATA 'daimaru-setup') 'workspaces') $Role
   $ready=Join-Path $workspace '.ready'
   Remove-Item $ready -Force -ErrorAction SilentlyContinue
   try { $data = Get-Content $file -Raw | ConvertFrom-Json } catch { return $false }
@@ -218,10 +252,7 @@ function Copy-RoleSkills([string]$Hub,[string]$Role) {
   $dest=Join-Path $config 'skills'
   $ready=Join-Path $workspace '.ready'
   try {
-    $gitInfo=Join-Path $Hub '.git\info'
-    New-Item -ItemType Directory -Force -Path $gitInfo,$config | Out-Null
-    $exclude=Join-Path $gitInfo 'exclude'
-    if (-not (Test-Path $exclude) -or [IO.File]::ReadAllLines($exclude) -notcontains '.workspaces/') { [IO.File]::AppendAllText($exclude,".workspaces/`n",(New-Object Text.UTF8Encoding($false))) }
+    New-Item -ItemType Directory -Force -Path $config | Out-Null
     Remove-Item $ready -Force -ErrorAction SilentlyContinue
     if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction Stop }
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
@@ -241,7 +272,11 @@ function Copy-RoleSkills([string]$Hub,[string]$Role) {
     $repos=Join-Path $Hub 'repos'
     if (Test-Path $repos -PathType Container) {
       $link=Join-Path $workspace 'repos'
-      if (Test-Path $link) { Remove-Item $link -Recurse -Force -ErrorAction Stop }
+      if (Test-Path $link) {
+        $existing=Get-Item $link -Force -ErrorAction Stop
+        if (($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { [IO.Directory]::Delete($link) }
+        else { Remove-Item $link -Recurse -Force -ErrorAction Stop }
+      }
       try { New-Item -ItemType Junction -Path $link -Target $repos -ErrorAction Stop | Out-Null; if (-not (Test-Path $link)) { throw 'junction unavailable' } }
       catch { Copy-Item $repos $link -Recurse -Force -ErrorAction Stop }
     }

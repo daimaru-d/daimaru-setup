@@ -55,6 +55,12 @@ k_op_read(){
   if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then op read "$1"
   else account="$(k_op_account)"; op --account "$account" read "$1"; fi
 }
+op_ready(){
+  local doctor="$HOME/.claude/skills/op-secrets/scripts/op-doctor.sh" output
+  have op && [ -f "$doctor" ] || return 1
+  output="$(bash "$doctor" 2>/dev/null)" || return 1
+  [ "${output##*$'\n'}" = 'OP_DOCTOR: PASS' ]
+}
 check_gws_secret(){
   local f="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$HOME/.config/gws}/client_secret.json"
   [ -f "$f" ] && chmod 600 "$f" && have node && node -e 'try{let x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(x.installed&&x.installed.client_id&&x.installed.client_secret?0:1)}catch(e){process.exit(1)}' "$f" 2>/dev/null
@@ -183,12 +189,10 @@ copy_skills(){
   local hub="$1" role="$2" list name workspace item
   [ -d "$hub/.claude/skills" ] || return 1
   if [ ! -f "$hub/profiles/$role.json" ]; then return 0; fi
-  workspace="$hub/.workspaces/$role"
+  workspace="$HOME/.config/daimaru-setup/workspaces/$role"
   rm -f "$workspace/.ready" || return 1
   have node || return 1
   list="$(node -e 'try{const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).skills;if(!Array.isArray(a)||a.some(x=>typeof x!=="string"||!/^[A-Za-z0-9-]+$/.test(x)))process.exit(2);a.forEach(x=>console.log(x))}catch(e){process.exit(2)}' "$hub/profiles/$role.json")" || return 1
-  mkdir -p "$hub/.git/info" || return 1
-  if ! grep -qxF '.workspaces/' "$hub/.git/info/exclude" 2>/dev/null; then printf '%s\n' '.workspaces/' >> "$hub/.git/info/exclude" || return 1; fi
   mkdir -p "$workspace/.claude" || return 1
   rm -f "$workspace/.ready" || return 1
   rm -rf "$workspace/.claude/skills" || return 1
@@ -209,13 +213,16 @@ $list
 EOF
   [ ! -f "$hub/CLAUDE.md" ] || cp "$hub/CLAUDE.md" "$workspace/CLAUDE.md" || return 1
   if [ -d "$hub/repos" ]; then
-    rm -rf "$workspace/repos" || return 1
+    if [ -L "$workspace/repos" ]; then rm "$workspace/repos" || return 1
+    else rm -rf "$workspace/repos" || return 1; fi
     ln -s "$hub/repos" "$workspace/repos" || return 1
   fi
   : > "$workspace/.ready"
 }
 role_workspace(){
-  if [ -f "$1/profiles/$2.json" ] && [ -f "$1/.workspaces/$2/.ready" ]; then printf '%s/.workspaces/%s' "$1" "$2"
+  if [ -f "$1/profiles/$2.json" ]; then
+    [ -f "$HOME/.config/daimaru-setup/workspaces/$2/.ready" ] || return 1
+    printf '%s/.config/daimaru-setup/workspaces/%s' "$HOME" "$2"
   else printf '%s' "$1"; fi
 }
 chrome_extension_state(){

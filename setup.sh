@@ -62,15 +62,22 @@ check_hub(){
   [ -d "$K_HUB/.git" ] || return 1
   if [ -f "$K_HUB/.gitmodules" ]; then (cd "$K_HUB" && git submodule update --init --recursive) || return 1; fi
 }
-clone_hub(){ have git && git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git "$K_HUB"; }
+clone_hub(){ [ ! -e "$K_HUB" ] && have git && git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git "$K_HUB"; }
 check_never(){ return 1; }
 update_hub(){
   if [ -d "$K_HUB/.git" ]; then (cd "$K_HUB" && git pull && git submodule sync --recursive && git submodule update --init --recursive)
   else clone_hub; fi
 }
-check_npm_ci(){ [ -d "$K_HUB/repos/eigyo-talk-analyzer/node_modules/pg" ] || [ ! -d "$K_HUB/repos/eigyo-talk-analyzer" ]; }
-install_npm_ci(){ [ -d "$K_HUB/repos/eigyo-talk-analyzer" ] && (cd "$K_HUB/repos/eigyo-talk-analyzer" && npm ci >/dev/null 2>&1); }
-check_op(){ have op && [ -f "$HOME/.claude/skills/op-secrets/scripts/op-doctor.sh" ]; }
+lock_hash(){ node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$K_HUB/repos/eigyo-talk-analyzer/package-lock.json" 2>/dev/null; }
+check_npm_ci(){
+  [ ! -d "$K_HUB/repos/eigyo-talk-analyzer" ] && return 0
+  [ -d "$K_HUB/repos/eigyo-talk-analyzer/node_modules/pg" ] && [ -n "$(state_get npm-lock-hash)" ] && [ "$(state_get npm-lock-hash)" = "$(lock_hash)" ]
+}
+install_npm_ci(){
+  [ -d "$K_HUB/repos/eigyo-talk-analyzer" ] && (cd "$K_HUB/repos/eigyo-talk-analyzer" && npm ci >/dev/null 2>&1) || return 1
+  state_set npm-lock-hash "$(lock_hash)"
+}
+check_op(){ op_ready; }
 install_op(){
   if [ -f "$K_HERE/scripts/op/setup.sh" ]; then bash "$K_HERE/scripts/op/setup.sh"
   else curl -fsSL "$K_BASE/scripts/op/setup.sh" | bash; fi
@@ -182,7 +189,8 @@ if [ -f "$K_ROOT/doctor/doctor.sh" ]; then
 else warn 'doctor を取得できませんでした'; fi
 if [ -d "$K_HUB/.git" ] && have claude; then
   cleanup_gws_temps
-  cd "$(role_workspace "$K_HUB" "$K_ROLE")" || exit 0
+  K_WORKSPACE="$(role_workspace "$K_HUB" "$K_ROLE")" || { warn '役割ワークスペースを準備できなかったため、hub で起動します'; K_WORKSPACE="$K_HUB"; }
+  cd "$K_WORKSPACE" || exit 0
   if [ -n "$K_TMP" ]; then rm -rf "$K_TMP"; K_TMP=''; fi
   exec claude --permission-mode acceptEdits
 fi
