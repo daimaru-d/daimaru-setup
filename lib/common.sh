@@ -9,7 +9,17 @@ hint(){ printf '      %s\n' "$*"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 dry_run(){ [ "${DAIMARU_DRY_RUN:-0}" = 1 ]; }
 update_only(){ [ "${DAIMARU_UPDATE:-0}" = 1 ]; }
-K_STATE="$HOME/.daimaru-setup/state.json"
+K_STATE="$HOME/.config/daimaru-setup/state.json"
+migrate_state(){
+  local old="$HOME/.daimaru-setup" target="${K_STATE%/*}"
+  dry_run && return 0
+  [ -f "$old/state.json" ] && [ ! -e "$K_STATE" ] && [ ! -e "$old/.git" ] || return 0
+  [ "$(find "$old" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" = 1 ] || return 0
+  mkdir -p "$target" || return 1
+  mv "$old/state.json" "$K_STATE" || return 1
+  rmdir "$old" || true
+}
+migrate_state
 K_OP_VAULT_DEFAULT=Claude-Automation
 K_OP_ITEM=gws-oauth-client
 K_OP_FIELD=client_secret.json
@@ -31,7 +41,7 @@ k_op_ref(){
 }
 check_gws_secret(){
   local f="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$HOME/.config/gws}/client_secret.json"
-  [ -f "$f" ] && have node && node -e 'try{let x=require(process.argv[1]);process.exit(x.installed&&x.installed.client_id&&x.installed.client_secret?0:1)}catch(e){process.exit(1)}' "$f" 2>/dev/null
+  [ -f "$f" ] && chmod 600 "$f" && have node && node -e 'try{let x=require(process.argv[1]);process.exit(x.installed&&x.installed.client_id&&x.installed.client_secret?0:1)}catch(e){process.exit(1)}' "$f" 2>/dev/null
 }
 install_gws_secret(){
   local dir="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$HOME/.config/gws}" tmp ref
@@ -54,10 +64,13 @@ role_select(){
   K_ROLE="${DAIMARU_ROLE:-}"
   if [ -z "$K_ROLE" ]; then
     K_ROLE=base
-    if [ -t 0 ] && ! dry_run; then
+    if ! dry_run && { [ -t 0 ] || { [ -r /dev/tty ] && [ -w /dev/tty ] && (: < /dev/tty) 2>/dev/null; }; }; then
       printf '役割 (base/sekkei/togo/yochi/somu-keiri、Enter=base): ' >&2
-      IFS= read -r K_ROLE || K_ROLE=base
+      if [ -t 0 ]; then IFS= read -r K_ROLE || K_ROLE=base
+      else IFS= read -r K_ROLE < /dev/tty || K_ROLE=base; fi
       K_ROLE="${K_ROLE:-base}"
+    elif ! dry_run; then
+      hint '対話端末がないため、役割は base で進めます（DAIMARU_ROLE で指定できます）'
     fi
   fi
   if ! valid_role "$K_ROLE"; then err '役割名が正しくありません'; return 2; fi
@@ -120,6 +133,7 @@ copy_skills(){
     [ -n "$name" ] || continue
     valid_skill "$name" || return 1
     [ -d "$hub/.claude/skills/$name" ] || return 1
+    rm -rf "$HOME/.claude/skills/$name" || return 1
     cp -R "$hub/.claude/skills/$name" "$HOME/.claude/skills/$name" || return 1
   done <<EOF
 $list

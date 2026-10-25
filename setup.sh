@@ -3,6 +3,7 @@
 set -uo pipefail
 K_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
 K_BASE="${DAIMARU_SETUP_BASE:-https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main}"
+case "$K_BASE" in https://*) ;; file://*) [ "${DAIMARU_SETUP_ALLOW_FILE:-0}" = 1 ] || { echo 'DAIMARU_SETUP_BASE は https:// のみ指定できます' >&2; exit 2; };; *) echo 'DAIMARU_SETUP_BASE は https:// のみ指定できます' >&2; exit 2;; esac
 K_TMP=''
 if [ -f "$K_HERE/lib/common.sh" ] && [ -d "$K_HERE/profiles" ]; then
   K_ROOT="$K_HERE"
@@ -34,6 +35,7 @@ profile_load "$K_ROOT/profiles/$K_ROLE.env" || { err 'プロファイルを読�
 export DAIMARU_ROLE="$K_ROLE"
 say "==> ${ROLE_LABEL} の準備"
 [ -n "$NOTE" ] && hint "$NOTE"
+if needs gws && ! dry_run; then check_gws_secret >/dev/null 2>&1 || true; fi
 case "$(uname -s)" in Darwin) K_OS=mac;; Linux) K_OS=linux;; *) K_OS=other;; esac
 K_HUB="$HOME/daimaru-skills"
 export PATH="$HOME/.local/bin:$HOME/google-cloud-sdk/bin:$PATH"
@@ -71,6 +73,7 @@ check_op(){ have op && [ -f "$HOME/.claude/skills/op-secrets/scripts/op-doctor.s
 install_op(){
   if [ -f "$K_HERE/scripts/op/setup.sh" ]; then bash "$K_HERE/scripts/op/setup.sh"
   else curl -fsSL "$K_BASE/scripts/op/setup.sh" | bash; fi
+  check_op
 }
 check_gws(){ have gws; }
 install_gws(){ have npm && npm i -g @googleworkspace/cli >/dev/null 2>&1; }
@@ -108,13 +111,13 @@ check_chrome_extension(){
     *) chrome_extension_state "$HOME/.config/google-chrome";; esac
 }
 show_chrome_extension(){
-  hint 'Chrome のストアで Claude を検索し、「追加」を押してください（検出できない場合もあります）'
+  hint 'Chrome のストアで Claude を検索し、追加ボタンを押してください（未確認）'
   if [ "$(state_get chrome-extension-open)" != ok ]; then
     case "$K_OS" in mac) open 'https://chromewebstore.google.com/search/Claude' >/dev/null 2>&1;;
       linux) have xdg-open && xdg-open 'https://chromewebstore.google.com/search/Claude' >/dev/null 2>&1;; esac
     state_set chrome-extension-open ok || true
   fi
-  return 0
+  return 1
 }
 check_skills(){ update_only && return 1; [ ! -f "$K_HUB/profiles/$K_ROLE.json" ] || [ -f "$HOME/.claude/skills/.daimaru-$K_ROLE" ]; }
 install_skills(){

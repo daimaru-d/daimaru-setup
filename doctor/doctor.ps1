@@ -1,12 +1,23 @@
-# PowerShell 5.1 doctor。setup.ps1 からも単独でも実行できる。
-$script:DoctorRoot = if ($env:DAIMARU_SETUP_ROOT) { $env:DAIMARU_SETUP_ROOT } else { Split-Path $PSScriptRoot -Parent }
-if (-not (Get-Command Load-Profile -ErrorAction SilentlyContinue)) { . (Join-Path $script:DoctorRoot 'lib\common.ps1') }
+﻿# PowerShell 5.1 doctor。setup.ps1 からも単独でも実行できる。
+$script:DoctorBase = if ($env:DAIMARU_SETUP_BASE) { $env:DAIMARU_SETUP_BASE.TrimEnd('/') } else { 'https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main' }
+if ($script:DoctorBase -notmatch '^https://' -and -not ($env:DAIMARU_SETUP_ALLOW_FILE -eq '1' -and $script:DoctorBase -match '^file://')) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=base'; return }
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+if ($env:OS -eq 'Windows_NT') { try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { Write-Host '実行ポリシーを変更できません。診断を中止します'; return } }
+$script:DoctorRoot = if ($env:DAIMARU_SETUP_ROOT) { $env:DAIMARU_SETUP_ROOT } elseif ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { $null }
+if (-not $script:DoctorRoot -or -not (Test-Path (Join-Path $script:DoctorRoot 'lib\common.ps1'))) {
+  $script:DoctorRoot=Join-Path ([IO.Path]::GetTempPath()) ('daimaru-doctor-' + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Force -Path (Join-Path $script:DoctorRoot 'lib'),(Join-Path $script:DoctorRoot 'profiles') | Out-Null
+  try { Invoke-WebRequest "$script:DoctorBase/lib/common.ps1" -OutFile (Join-Path $script:DoctorRoot 'lib\common.ps1') -UseBasicParsing -ErrorAction Stop } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=common'; return }
+}
+if (-not (Get-Command Load-Profile -ErrorAction SilentlyContinue)) { try { . (Join-Path $script:DoctorRoot 'lib\common.ps1') } catch { Write-Host '共通部品を読み込めません。診断を中止します'; return } }
 $script:DoctorRole = $env:DAIMARU_ROLE
 if (-not $script:DoctorRole) { try { $script:DoctorRole=(Get-Content $script:KState -Raw | ConvertFrom-Json).role } catch { } }
 if (-not $script:DoctorRole) { $script:DoctorRole='base' }
 if (-not (Valid-Role $script:DoctorRole)) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=role'; exit 2 }
 $script:KRole=$script:DoctorRole
-if (-not (Load-Profile (Join-Path $script:DoctorRoot "profiles\$script:DoctorRole.env"))) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=profile'; exit 2 }
+$profilePath=Join-Path $script:DoctorRoot "profiles\$script:DoctorRole.env"
+if (-not (Test-Path $profilePath)) { try { Invoke-WebRequest "$script:DoctorBase/profiles/$script:DoctorRole.env" -OutFile $profilePath -UseBasicParsing -ErrorAction Stop } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=profile'; return } }
+if (-not (Load-Profile $profilePath)) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=profile'; return }
 $script:Missing=New-Object 'System.Collections.Generic.List[string]'
 function Doctor-Fail([string]$Slug,[string]$Message,[string]$Fix) { Err $Message; $script:Missing.Add($Slug); Hint $Fix }
 function Doctor-Skip([string]$Message) { Warn "$Message`: 省略" }
@@ -41,7 +52,7 @@ if (Needs 'gws') {
   if ($env:DAIMARU_DOCTOR_SKIP_NETWORK -eq '1') { Doctor-Skip 'gws 実 API' }
   elseif (Have gws.cmd) {
     $errFile=Join-Path ([IO.Path]::GetTempPath()) ('gws-doctor-' + [guid]::NewGuid().ToString('N'))
-    Invoke-Cli gws @('drive','files','list','--params','{"pageSize":1,"fields":"files(id)"}') 2>$errFile | Out-Null
+    Invoke-Gws @('drive','files','list') 2>$errFile | Out-Null
     $rc=$LASTEXITCODE
     if ($rc -eq 0) { Ok 'gws: Drive 実 API 成功' }
     else { Doctor-Fail 'gws-api' 'gws: Drive 実 API に失敗' 'gws auth login -s drive,sheets,gmail を実行'; if ((Get-Content $errFile -Raw -ErrorAction SilentlyContinue) -match '401') { Hint '401: ~/.config/gws/token_cache.json を退避して再ログインしてください' } }
@@ -52,7 +63,8 @@ if (Needs 'op') {
   $opDoctor=Join-Path $HOME '.claude\skills\op-secrets\scripts\op-doctor.sh'
   if ($env:DAIMARU_DOCTOR_SKIP_NETWORK -eq '1') { Doctor-Skip '1Password 診断' }
   elseif (Test-Path $opDoctor) {
-    $out=@(bash $opDoctor 2>&1)
+    $gitBash=Get-GitBash
+    $out=if ($gitBash) { @(& $gitBash ($opDoctor -replace '\\','/') 2>&1) } else { @() }
     if ($out.Count -gt 0 -and $out[-1] -eq 'OP_DOCTOR: PASS') { Ok '1Password: OP_DOCTOR PASS' }
     else { Doctor-Fail 'op-doctor' '1Password: OP_DOCTOR が PASS ではありません' 'bash ~/.claude/skills/op-secrets/scripts/op-doctor.sh' }
   } else { Doctor-Fail 'op-doctor' '1Password の診断スクリプトがありません' 'scripts/op/setup.ps1 を実行してください' }
@@ -65,6 +77,17 @@ if (Needs 'chrome') {
   }
 }
 foreach ($tool in @('clasp','gcloud')) { if (Needs $tool) { if (Have $tool) { Ok "$tool`: 利用可能" } else { Doctor-Fail $tool "$tool がありません" "winget / npm で $tool を導入してください" } } }
+if (Needs 'clasp') {
+  if (Test-Path (Join-Path $HOME '.clasprc.json')) { Ok 'clasp: ログイン済み' }
+  else { Doctor-Fail 'clasp-login' 'clasp にログインしていません' 'clasp login を実行してください' }
+}
+if (Needs 'gcloud') {
+  if ($env:DAIMARU_DOCTOR_SKIP_NETWORK -eq '1') { Doctor-Skip 'ADC' }
+  elseif (Have gcloud.cmd) { Invoke-Cli gcloud @('auth','application-default','print-access-token') 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { Ok 'ADC: 利用可能' } else { Doctor-Fail 'adc' 'ADC を確認できません' 'gcloud auth application-default login を実行してください' } }
+  else { Doctor-Fail 'adc' 'ADC を確認できません' 'gcloud auth application-default login を実行してください' }
+  if (Have cloud-sql-proxy.exe) { Ok 'cloud-sql-proxy: 利用可能' }
+  else { Doctor-Fail 'cloud-sql-proxy' 'cloud-sql-proxy がありません' 'cloud-sql-proxy を導入してください' }
+}
 foreach ($dir in @((Join-Path $HOME 'Downloads'),(Join-Path $HOME 'Desktop'))) {
   if (-not (Test-Path $dir)) { continue }
   Get-ChildItem $dir -Recurse -Depth 1 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'client_secret*.json' -or $_.Name -eq '.env' } | ForEach-Object { Warn "機密ファイル候補: $($_.FullName)"; Hint '不要なら安全な場所へ移し、元のファイルを削除してください' }

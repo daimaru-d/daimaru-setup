@@ -21,7 +21,7 @@
 | `yochi` | 共通の道具、gws（Gmail、Drive） |
 | `somu-keiri` | 共通の道具、gws、1Password、[経理の追加手順](./scripts/keiri/) |
 
-例: macOS / Linux は `DAIMARU_ROLE=sekkei` を設定してから一行を実行します。Windows は `$env:DAIMARU_ROLE='sekkei'` を設定します。対話実行では役割を選べます。
+例: macOS / Linux は `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh | DAIMARU_ROLE=sekkei bash`、Windows は `$env:DAIMARU_ROLE='sekkei'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 | iex` を実行します。役割を指定しなければ対話端末から選べます。
 
 ## うまくいっているか確かめる
 
@@ -30,7 +30,7 @@ doctor という診断を実行すると、できていない所とその直し�
 |:--|:--|:--|
 | 予定だけ表示 | `DAIMARU_DRY_RUN=1 DAIMARU_ROLE=sekkei bash setup.sh` | `$env:DAIMARU_DRY_RUN='1'; .\setup.ps1` |
 | 更新 | `DAIMARU_UPDATE=1 bash setup.sh` | `$env:DAIMARU_UPDATE='1'; .\setup.ps1` |
-| 診断 | `bash doctor/doctor.sh` | `.\doctor\doctor.ps1` |
+| 診断 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.sh \| bash` | `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.ps1 \| iex` |
 | 通信せず診断 | `DAIMARU_DOCTOR_SKIP_NETWORK=1 bash doctor/doctor.sh` | `$env:DAIMARU_DOCTOR_SKIP_NETWORK='1'; .\doctor\doctor.ps1` |
 
 共有 OAuth 設定が読めない場合は、管理者に 1Password の招待を頼んでください。

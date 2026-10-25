@@ -1,8 +1,22 @@
-# PowerShell 5.1 共通部品
+﻿# PowerShell 5.1 共通部品
 $script:KOpVaultDefault = 'Claude-Automation'
 $script:KOpItem = 'gws-oauth-client'
 $script:KOpField = 'client_secret.json'
-$script:KState = Join-Path $HOME '.daimaru-setup\state.json'
+$script:KState = Join-Path (Join-Path $env:APPDATA 'daimaru-setup') 'state.json'
+function Test-SetupBase([string]$Base) {
+  return ($Base -match '^https://' -or ($env:DAIMARU_SETUP_ALLOW_FILE -eq '1' -and $Base -match '^file://'))
+}
+function Move-LegacyState {
+  if ($env:DAIMARU_DRY_RUN -eq '1') { return }
+  $oldDir=Join-Path $HOME '.daimaru-setup'
+  $old=Join-Path $oldDir 'state.json'
+  if (-not (Test-Path $old) -or (Test-Path $script:KState) -or (Test-Path (Join-Path $oldDir '.git'))) { return }
+  if (@(Get-ChildItem -Force $oldDir).Count -ne 1) { return }
+  New-Item -ItemType Directory -Force -Path (Split-Path $script:KState -Parent) | Out-Null
+  Move-Item $old $script:KState
+  Remove-Item $oldDir -ErrorAction SilentlyContinue
+}
+Move-LegacyState
 function Say([string]$Message) { Write-Host $Message -ForegroundColor Cyan }
 function Ok([string]$Message) { Write-Host "  ✓ $Message" -ForegroundColor Green }
 function Warn([string]$Message) { Write-Host "  ! $Message" -ForegroundColor Yellow }
@@ -16,9 +30,11 @@ function Select-Role {
   $script:KRole = $env:DAIMARU_ROLE
   if (-not $script:KRole) {
     $script:KRole = 'base'
-    if (-not (Is-DryRun) -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    if (-not (Is-DryRun) -and [Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost') {
       $answer = Read-Host '役割 (base/sekkei/togo/yochi/somu-keiri、Enter=base)'
       if ($answer) { $script:KRole = $answer }
+    } elseif (-not (Is-DryRun)) {
+      Hint '対話端末がないため、役割は base で進めます（DAIMARU_ROLE で指定できます）'
     }
   }
   if (-not (Valid-Role $script:KRole)) { Err '役割名が正しくありません'; return $false }
@@ -75,6 +91,25 @@ function Invoke-Cli([string]$Name,[string[]]$CliArgs) {
   if (-not $cmd) { $cmd = Get-Command $Name -ErrorAction Stop }
   & $cmd.Source @CliArgs
 }
+function Invoke-Gws([string[]]$GwsArgs) {
+  $params='{"pageSize":1,"fields":"files(id)"}'
+  if ($PSVersionTable.PSVersion.Major -lt 7) { $params=$params.Replace('"','\"') }
+  Invoke-Cli gws ($GwsArgs + @('--params',$params))
+}
+function Get-GitBash {
+  $git=Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($git) {
+    $candidate=Join-Path (Split-Path (Split-Path $git.Source -Parent) -Parent) 'bin\bash.exe'
+    if (Test-Path $candidate) { return $candidate }
+  }
+  if (Test-Path 'C:\Program Files\Git\bin\bash.exe') { return 'C:\Program Files\Git\bin\bash.exe' }
+  return $null
+}
+function Get-RemoteScript([string]$Url) {
+  $client=New-Object Net.WebClient
+  try { $client.Encoding=New-Object Text.UTF8Encoding($false); return $client.DownloadString($Url).TrimStart([char]0xFEFF) }
+  finally { $client.Dispose() }
+}
 function Get-OpRef {
   $vault=$env:OP_VAULT
   $config=Join-Path $HOME '.config\daimaru-op\config'
@@ -109,7 +144,9 @@ function Copy-RoleSkills([string]$Hub,[string]$Role) {
   foreach ($name in $data.skills) {
     $source = Join-Path $Hub ".claude\skills\$name"
     if (-not (Test-Path $source -PathType Container)) { return $false }
-    Copy-Item -Path $source -Destination (Join-Path $dest $name) -Recurse -Force
+    $target=Join-Path $dest $name
+    if (Test-Path $target) { Remove-Item -Path $target -Recurse -Force }
+    Copy-Item -Path $source -Destination $target -Recurse -Force
   }
   return $true
 }

@@ -3,6 +3,14 @@
 set -uo pipefail
 D_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 D_ROOT="${DAIMARU_SETUP_ROOT:-$D_HERE}"
+D_BASE="${DAIMARU_SETUP_BASE:-https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main}"
+case "$D_BASE" in https://*) ;; file://*) [ "${DAIMARU_SETUP_ALLOW_FILE:-0}" = 1 ] || { echo 'DAIMARU_DOCTOR: FAIL missing=base'; exit 2; };; *) echo 'DAIMARU_DOCTOR: FAIL missing=base'; exit 2;; esac
+if [ ! -f "$D_ROOT/lib/common.sh" ]; then
+  D_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/daimaru-doctor.XXXXXX")" || exit 2
+  trap 'rm -rf "$D_ROOT"' EXIT
+  mkdir -p "$D_ROOT/lib" "$D_ROOT/profiles"
+  curl -fsSL "$D_BASE/lib/common.sh" -o "$D_ROOT/lib/common.sh" || { echo 'DAIMARU_DOCTOR: FAIL missing=common'; exit 2; }
+fi
 # shellcheck source=lib/common.sh
 . "$D_ROOT/lib/common.sh"
 if [ -z "${DAIMARU_ROLE:-}" ] && [ -f "$K_STATE" ] && have node; then
@@ -12,10 +20,7 @@ DAIMARU_ROLE="${DAIMARU_ROLE:-base}"
 if ! valid_role "$DAIMARU_ROLE"; then echo 'DAIMARU_DOCTOR: FAIL missing=role'; exit 2; fi
 K_ROLE="$DAIMARU_ROLE"
 if [ ! -f "$D_ROOT/profiles/$K_ROLE.env" ]; then
-  if [ "${DAIMARU_DOCTOR_SKIP_NETWORK:-0}" = 1 ]; then
-    echo 'DAIMARU_DOCTOR: FAIL missing=profile'; exit 2
-  fi
-  echo 'DAIMARU_DOCTOR: FAIL missing=profile'; exit 2
+  curl -fsSL "$D_BASE/profiles/$K_ROLE.env" -o "$D_ROOT/profiles/$K_ROLE.env" || { echo 'DAIMARU_DOCTOR: FAIL missing=profile'; exit 2; }
 fi
 profile_load "$D_ROOT/profiles/$K_ROLE.env" || { echo 'DAIMARU_DOCTOR: FAIL missing=profile'; exit 2; }
 D_MISSING=()
@@ -109,6 +114,17 @@ for D_TOOL in clasp gcloud; do
     else fail_item "$D_TOOL" "$D_TOOL がありません" "Mac: brew / npm で $D_TOOL を導入。Windows: winget / npm で導入"; fi
   fi
 done
+if needs clasp; then
+  if [ -f "$HOME/.clasprc.json" ]; then pass_item 'clasp: ログイン済み'
+  else fail_item clasp-login 'clasp にログインしていません' 'clasp login を実行してください'; fi
+fi
+if needs gcloud; then
+  if network_skip; then skip_item 'ADC'
+  elif have gcloud && gcloud auth application-default print-access-token >/dev/null 2>&1; then pass_item 'ADC: 利用可能'
+  else fail_item adc 'ADC を確認できません' 'gcloud auth application-default login を実行してください'; fi
+  if have cloud-sql-proxy; then pass_item 'cloud-sql-proxy: 利用可能'
+  else fail_item cloud-sql-proxy 'cloud-sql-proxy がありません' 'cloud-sql-proxy を導入してください'; fi
+fi
 for D_DIR in "$HOME/Downloads" "$HOME/Desktop"; do
   [ -d "$D_DIR" ] || continue
   while IFS= read -r D_FILE; do

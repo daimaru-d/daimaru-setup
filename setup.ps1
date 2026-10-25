@@ -1,6 +1,9 @@
-# Windows PowerShell 5.1 / irm .../setup.ps1 | iex
+﻿# Windows PowerShell 5.1 / irm .../setup.ps1 | iex
 $ErrorActionPreference = 'Continue'
 $script:KBase = if ($env:DAIMARU_SETUP_BASE) { $env:DAIMARU_SETUP_BASE.TrimEnd('/') } else { 'https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main' }
+if ($script:KBase -notmatch '^https://' -and -not ($env:DAIMARU_SETUP_ALLOW_FILE -eq '1' -and $script:KBase -match '^file://')) { Write-Host 'DAIMARU_SETUP_BASE は https:// のみ指定できます'; return }
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+if ($env:OS -eq 'Windows_NT') { try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { Write-Host '実行ポリシーを変更できません。組織設定を確認してください'; return } }
 $script:KRoot = $null
 $script:KTemp = $null
 $localRoot = $null
@@ -24,7 +27,8 @@ elseif ($env:DAIMARU_DRY_RUN -eq '1') {
   try { Invoke-WebRequest "$script:KBase/lib/common.ps1" -OutFile (Join-Path $script:KTemp 'lib\common.ps1') -UseBasicParsing -ErrorAction Stop } catch { Write-Host '共通部品を取得できません'; return }
   $script:KRoot=$script:KTemp
 }
-. (Join-Path $script:KRoot 'lib\common.ps1')
+try { . (Join-Path $script:KRoot 'lib\common.ps1') } catch { Write-Host '共通部品を読み込めません。セットアップを中止します'; return }
+if (-not (Get-Command Select-Role -ErrorAction SilentlyContinue)) { Write-Host '共通部品を読み込めません。セットアップを中止します'; return }
 if (-not (Select-Role)) { return }
 $profileFile=Join-Path $script:KRoot "profiles\$script:KRole.env"
 if (-not (Test-Path $profileFile)) {
@@ -37,7 +41,6 @@ if ($script:KProfile.NOTE) { Hint $script:KProfile.NOTE }
 $script:KHub=Join-Path $HOME 'daimaru-skills'
 if (-not (Is-DryRun) -and -not (Is-Update)) {
   try { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop } catch { Warn '実行ポリシーは組織設定に従います。.cmd 経由で続行します' }
-  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
 }
 Run-Step 'git' { Have git } { winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; Have git }
 Run-Step 'node' { Have node } { winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; Have node }
@@ -59,7 +62,7 @@ Run-Step 'hub' { Test-Path (Join-Path $script:KHub '.git') } {
 if (Is-Update) {
   Run-Step 'hub-update' { return $false } {
     if (-not (Test-Path (Join-Path $script:KHub '.git'))) { git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git $script:KHub }
-    else { Push-Location $script:KHub; git pull --recurse-submodules; $rc=$LASTEXITCODE; Pop-Location; if ($rc -ne 0) { return $false } }
+    else { Push-Location $script:KHub; git pull --recurse-submodules | Out-Null; $rc=$LASTEXITCODE; Pop-Location; if ($rc -ne 0) { return $false } }
     return (Test-Path (Join-Path $script:KHub '.git'))
   }
 }
@@ -70,8 +73,8 @@ if (Needs 'op') {
   Run-Step 'op' { (Have op) -and (Test-Path (Join-Path $HOME '.claude\skills\op-secrets\scripts\op-doctor.sh')) } {
     $opFile=Join-Path $script:KRoot 'scripts\op\setup.ps1'
     try {
-      if (Test-Path $opFile) { . $opFile } else { $code=(Invoke-WebRequest "$script:KBase/scripts/op/setup.ps1" -UseBasicParsing -ErrorAction Stop).Content; Invoke-Expression $code }
-      return (Have op)
+      if (Test-Path $opFile) { . $opFile } else { Invoke-Expression (Get-RemoteScript "$script:KBase/scripts/op/setup.ps1") }
+      return (Test-Path (Join-Path $HOME '.claude\skills\op-secrets\scripts\op-doctor.sh'))
     } catch { return $false }
   }
 }
@@ -85,8 +88,14 @@ if (Needs 'gws') {
   $secretFile=Join-Path $gwsDir 'client_secret.json'
   $validSecret={
     if (-not (Test-Path $secretFile)) { return $false }
-    try { $j=Get-Content $secretFile -Raw | ConvertFrom-Json; return [bool]($j.installed.client_id -and $j.installed.client_secret) } catch { return $false }
+    try {
+      icacls $secretFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
+      if ($LASTEXITCODE -ne 0 -or -not (Set-PrivateAcl $secretFile $false)) { return $false }
+      $j=Get-Content $secretFile -Raw | ConvertFrom-Json
+      return [bool]($j.installed.client_id -and $j.installed.client_secret)
+    } catch { return $false }
   }
+  if (Is-Update) { & $validSecret | Out-Null }
   Run-Step 'gws-secret' $validSecret {
     if (-not (Have op)) { Hint '管理者に 1Password の招待を頼んでください'; return $false }
     $opRef=Get-OpRef
@@ -108,11 +117,11 @@ if (Needs 'gws') {
     if (-not (Set-PrivateAcl $secretFile $false)) { Remove-Item $secretFile -ErrorAction SilentlyContinue; return $false }
     return $true
   }
-  Run-Step 'gws-auth' { if (-not (Have gws.cmd)) { return $false }; Invoke-Cli gws @('drive','files','list','--params','{"pageSize":1,"fields":"files(id)"}') 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } {
+  Run-Step 'gws-auth' { if (-not (Have gws.cmd)) { return $false }; Invoke-Gws @('drive','files','list') 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } {
     if (-not (& $validSecret)) { Hint '管理者に 1Password の招待を頼んでください'; return $false }
     Invoke-Cli gws @('auth','login','-s',$script:KProfile.GWS_SCOPES) | Out-Null
     if ($LASTEXITCODE -ne 0) { return $false }
-    Invoke-Cli gws @('drive','files','list','--params','{"pageSize":1,"fields":"files(id)"}') 2>$null | Out-Null
+    Invoke-Gws @('drive','files','list') 2>$null | Out-Null
     return ($LASTEXITCODE -eq 0)
   }
 }
@@ -133,9 +142,9 @@ if (Needs 'chrome') {
   Run-Step 'chrome' { Chrome-Installed } { winget install --id Google.Chrome -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; return (Chrome-Installed) }
   if ($script:KProfile.NEEDS_CLAUDE_CHROME -eq '1') {
     Run-Step 'chrome-extension' { Find-ClaudeChrome } {
-      Hint 'Chrome ストアで Claude を検索し、「追加」を押してください（検出できない場合もあります）'
+      Hint 'Chrome ストアで Claude を検索し、追加ボタンを押してください（未確認）'
       if ((Get-StateStep 'chrome-extension-open') -ne 'ok') { Start-Process 'https://chromewebstore.google.com/search/Claude'; Set-StateStep 'chrome-extension-open' 'ok' }
-      return $true
+      return $false
     }
   }
 }
