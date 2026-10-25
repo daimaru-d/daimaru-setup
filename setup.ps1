@@ -1,16 +1,16 @@
-﻿# Windows PowerShell 5.1 / irm .../setup.ps1 | iex
+# Windows PowerShell 5.1 / irm .../setup.ps1 | iex
 $ErrorActionPreference = 'Continue'
 $script:KBase = if ($env:DAIMARU_SETUP_BASE) { $env:DAIMARU_SETUP_BASE.TrimEnd('/') } else { 'https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main' }
 if ($script:KBase -notmatch '^https://' -and -not ($env:DAIMARU_SETUP_ALLOW_FILE -eq '1' -and $script:KBase -match '^file://')) { Write-Host 'DAIMARU_SETUP_BASE は https:// のみ指定できます'; return }
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
-if ($env:OS -eq 'Windows_NT') { try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { Write-Host '実行ポリシーを変更できません。組織設定を確認してください'; return } }
+if ($env:OS -eq 'Windows_NT') { try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { Write-Host '実行ポリシーは組織設定に従います。続行します' } }
 $script:KRoot = $null
 $script:KTemp = $null
 $localRoot = $null
 if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'profiles'))) { $localRoot=$PSScriptRoot }
 if ($localRoot) { $script:KRoot=$localRoot }
 elseif ($env:DAIMARU_DRY_RUN -eq '1') {
-  $role=if ($env:DAIMARU_ROLE) { $env:DAIMARU_ROLE } else { 'base' }
+  $role=if ($env:DAIMARU_ROLE) { $env:DAIMARU_ROLE } else { try { (Get-Content (Join-Path $env:APPDATA 'daimaru-setup\state.json') -Raw | ConvertFrom-Json).role } catch { 'base' } }
   if (@('base','sekkei','togo','yochi','somu-keiri') -notcontains $role) { Write-Host '役割名が正しくありません'; return }
   Write-Host "予定: $role の準備（オンラインのプロファイル取得を省略）"
   Write-Host '予定: Claude Code / Git / Node.js / GitHub CLI / daimaru-skills / doctor'
@@ -39,6 +39,7 @@ $env:DAIMARU_ROLE=$script:KRole
 Say "==> $($script:KProfile.ROLE_LABEL) の準備"
 if ($script:KProfile.NOTE) { Hint $script:KProfile.NOTE }
 $script:KHub=Join-Path $HOME 'daimaru-skills'
+if (-not (Is-DryRun)) { Clear-GwsTemps }
 if (-not (Is-DryRun) -and -not (Is-Update)) {
   try { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop } catch { Warn '実行ポリシーは組織設定に従います。.cmd 経由で続行します' }
 }
@@ -46,17 +47,21 @@ Run-Step 'git' { Have git } { winget install --id Git.Git -e --accept-package-ag
 Run-Step 'node' { Have node } { winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; Have node }
 Run-Step 'gh' { Have gh } { winget install --id GitHub.cli -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; Have gh }
 Run-Step 'claude' { Have claude.cmd } { Invoke-Cli npm @('install','-g','@anthropic-ai/claude-code') | Out-Null; Refresh-Path; Have claude.cmd }
-Run-Step 'gh-access' { if (-not (Have gh)) { return $false }; gh auth status 2>$null | Out-Null; if ($LASTEXITCODE -ne 0) { return $false }; gh api repos/daimaru-d/daimaru-skills 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } {
+Run-Step 'gh-access' { if (-not (Have gh)) { return $false }; gh auth status 2>$null | Out-Null;   if ($LASTEXITCODE -ne 0) { return $false }; gh api repos/daimaru-d/daimaru-skills 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } {
   if (-not (Have gh)) { return $false }
   gh auth status 2>$null | Out-Null
   if ($LASTEXITCODE -ne 0) { gh auth login --hostname github.com --git-protocol https --web }
-  gh auth setup-git 2>$null | Out-Null
   gh api repos/daimaru-d/daimaru-skills 2>$null | Out-Null
   if ($LASTEXITCODE -ne 0) { Hint '管理者に daimaru-d の read 権限を依頼してください'; return $false }
   return $true
 }
-Run-Step 'hub' { Test-Path (Join-Path $script:KHub '.git') } {
-  git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git $script:KHub
+if (-not (Is-DryRun) -and (Have gh)) { gh auth setup-git 2>$null | Out-Null }
+Run-Step 'hub' {
+  if (-not (Test-Path (Join-Path $script:KHub '.git'))) { return $false }
+  if (Test-Path (Join-Path $script:KHub '.gitmodules')) { Push-Location $script:KHub; try { git submodule update --init --recursive | Out-Null; return ($LASTEXITCODE -eq 0) } finally { Pop-Location } }
+  return $true
+} {
+  git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git $script:KHub | Out-Null
   return (Test-Path (Join-Path $script:KHub '.git'))
 }
 if (Is-Update) {
@@ -89,8 +94,7 @@ if (Needs 'gws') {
   $validSecret={
     if (-not (Test-Path $secretFile)) { return $false }
     try {
-      icacls $secretFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
-      if ($LASTEXITCODE -ne 0 -or -not (Set-PrivateAcl $secretFile $false)) { return $false }
+      if (-not (Set-PrivateAcl $secretFile $false)) { return $false }
       $j=Get-Content $secretFile -Raw | ConvertFrom-Json
       return [bool]($j.installed.client_id -and $j.installed.client_secret)
     } catch { return $false }
@@ -101,28 +105,30 @@ if (Needs 'gws') {
     $opRef=Get-OpRef
     $dir=Split-Path $secretFile -Parent
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    icacls $dir /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
-    if ($LASTEXITCODE -ne 0) { return $false }
+    Get-ChildItem $dir -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '.client_secret-*' -or $_.Name -eq '.op-error.tmp' } | Remove-Item -Force -ErrorAction SilentlyContinue
     if (-not (Set-PrivateAcl $dir $true)) { return $false }
     $tmp=Join-Path $dir ('.client_secret-' + [guid]::NewGuid().ToString('N'))
     $opCmd=(Get-Command op.exe,op -ErrorAction SilentlyContinue | Select-Object -First 1)
     if (-not $opCmd) { return $false }
-    $p=Start-Process -FilePath $opCmd.Source -ArgumentList @('read',$opRef) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmp -RedirectStandardError (Join-Path $dir '.op-error.tmp')
-    Remove-Item (Join-Path $dir '.op-error.tmp') -ErrorAction SilentlyContinue
-    if ($p.ExitCode -ne 0) { Remove-Item $tmp -ErrorAction SilentlyContinue; Hint '管理者に 1Password の招待を頼んでください'; return $false }
-    try { $j=Get-Content $tmp -Raw | ConvertFrom-Json; if (-not ($j.installed.client_id -and $j.installed.client_secret)) { throw 'invalid' } } catch { Remove-Item $tmp -ErrorAction SilentlyContinue; return $false }
-    Move-Item -Force $tmp $secretFile
-    icacls $secretFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
-    if ($LASTEXITCODE -ne 0) { Remove-Item $secretFile -ErrorAction SilentlyContinue; return $false }
-    if (-not (Set-PrivateAcl $secretFile $false)) { Remove-Item $secretFile -ErrorAction SilentlyContinue; return $false }
-    return $true
+    try {
+      $p=Start-Process -FilePath $opCmd.Source -ArgumentList @('read',$opRef) -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmp -RedirectStandardError (Join-Path $dir '.op-error.tmp')
+      if ($p.ExitCode -ne 0) { Hint '管理者に 1Password の招待を頼んでください'; return $false }
+      $j=Get-Content $tmp -Raw | ConvertFrom-Json
+      if (-not ($j.installed.client_id -and $j.installed.client_secret)) { return $false }
+      if (-not (Set-PrivateAcl $tmp $false)) { return $false }
+      Move-Item -Force $tmp $secretFile
+      return $true
+    } catch { return $false }
+    finally { Remove-Item $tmp,(Join-Path $dir '.op-error.tmp') -Force -ErrorAction SilentlyContinue }
   }
-  Run-Step 'gws-auth' { if (-not (Have gws.cmd)) { return $false }; Invoke-Gws @('drive','files','list') 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } {
+  Run-Step 'gws-auth' { if (-not (Have gws.cmd)) { return $false }; Invoke-Gws @('drive','files','list') 2>$null | Out-Null; return ($LASTEXITCODE -eq 0 -and (Test-Scopes (Get-StateScopes) $script:KProfile.GWS_SCOPES)) } {
     if (-not (& $validSecret)) { Hint '管理者に 1Password の招待を頼んでください'; return $false }
-    Invoke-Cli gws @('auth','login','-s',$script:KProfile.GWS_SCOPES) | Out-Null
+    Invoke-Cli gws @('auth','login','-s',$script:KProfile.GWS_SCOPES)
     if ($LASTEXITCODE -ne 0) { return $false }
     Invoke-Gws @('drive','files','list') 2>$null | Out-Null
-    return ($LASTEXITCODE -eq 0)
+    if ($LASTEXITCODE -ne 0) { return $false }
+    Set-StateScopes $script:KProfile.GWS_SCOPES
+    return $true
   }
 }
 if (Needs 'vscode') {
@@ -158,10 +164,8 @@ if (Needs 'gcloud') {
   Run-Step 'adc' { if (-not (Have gcloud.cmd)) { return $false }; Invoke-Cli gcloud @('auth','application-default','print-access-token') 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } { Invoke-Cli gcloud @('auth','application-default','login') | Out-Null; return ($LASTEXITCODE -eq 0) }
   Run-Step 'cloud-sql-proxy' { Have cloud-sql-proxy.exe } { Invoke-Cli gcloud @('components','install','cloud-sql-proxy','--quiet') | Out-Null; return ($LASTEXITCODE -eq 0) }
 }
-Run-Step 'skills' { if (Is-Update) { return $false }; return (-not (Test-Path (Join-Path $script:KHub "profiles\$script:KRole.json")) -or (Test-Path (Join-Path $HOME ".claude\skills\.daimaru-$script:KRole"))) } {
-  if (-not (Copy-RoleSkills $script:KHub $script:KRole)) { return $false }
-  if (Test-Path (Join-Path $script:KHub "profiles\$script:KRole.json")) { New-Item -ItemType File -Force -Path (Join-Path $HOME ".claude\skills\.daimaru-$script:KRole") | Out-Null }
-  return $true
+Run-Step 'skills' { return (-not (Test-Path (Join-Path $script:KHub "profiles\$script:KRole.json"))) } {
+  return (Copy-RoleSkills $script:KHub $script:KRole)
 }
 if ($script:KRole -eq 'somu-keiri') { Hint '総務経理の追加手順: scripts/keiri/onboard.ps1 を参照してください' }
 if (Is-DryRun) { Say '予定の表示を完了しました'; return }
@@ -169,5 +173,9 @@ if (Is-Update) { Say '更新を完了しました'; return }
 $doctorFile=Join-Path $script:KRoot 'doctor\doctor.ps1'
 if (-not (Test-Path $doctorFile)) { try { Invoke-WebRequest "$script:KBase/doctor/doctor.ps1" -OutFile $doctorFile -UseBasicParsing -ErrorAction Stop } catch { Warn 'doctor を取得できませんでした' } }
 if (Test-Path $doctorFile) { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $doctorFile }
-if (Test-Path (Join-Path $script:KHub '.git')) { Set-Location $script:KHub; if (Have claude.cmd) { Invoke-Cli claude @('--permission-mode','acceptEdits') } }
+if (Test-Path (Join-Path $script:KHub '.git')) {
+  Clear-GwsTemps
+  Set-Location (Get-RoleWorkspace $script:KHub $script:KRole)
+  if (Have claude.cmd) { Invoke-Cli claude @('--permission-mode','acceptEdits') }
+}
 if ($script:KTemp) { Remove-Item -Recurse -Force $script:KTemp -ErrorAction SilentlyContinue }

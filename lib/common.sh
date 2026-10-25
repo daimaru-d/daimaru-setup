@@ -41,7 +41,11 @@ k_op_ref(){
 }
 check_gws_secret(){
   local f="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$HOME/.config/gws}/client_secret.json"
-  [ -f "$f" ] && chmod 600 "$f" && have node && node -e 'try{let x=require(process.argv[1]);process.exit(x.installed&&x.installed.client_id&&x.installed.client_secret?0:1)}catch(e){process.exit(1)}' "$f" 2>/dev/null
+  [ -f "$f" ] && chmod 600 "$f" && have node && node -e 'try{let x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(x.installed&&x.installed.client_id&&x.installed.client_secret?0:1)}catch(e){process.exit(1)}' "$f" 2>/dev/null
+}
+cleanup_gws_temps(){
+  local dir="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$HOME/.config/gws}"
+  rm -f "$dir"/.client_secret-* "$dir/.op-error.tmp"
 }
 install_gws_secret(){
   local dir="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$HOME/.config/gws}" tmp ref
@@ -49,20 +53,21 @@ install_gws_secret(){
   ref="$(k_op_ref)" || return 1
   mkdir -p "$dir" || return 1
   chmod 700 "$dir" || return 1
-  tmp="$(mktemp "$dir/.client_secret.XXXXXX")" || return 1
-  chmod 600 "$tmp" || { rm -f "$tmp"; return 1; }
-  if ! op read "$ref" > "$tmp" 2>/dev/null; then
-    rm -f "$tmp"; hint '管理者に 1Password の招待を頼んでください'; return 1
-  fi
-  if ! node -e 'try{let x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(x.installed&&x.installed.client_id&&x.installed.client_secret?0:1)}catch(e){process.exit(1)}' "$tmp" 2>/dev/null; then
-    rm -f "$tmp"; hint '共有 OAuth 設定を確認できません。管理者に 1Password の招待を頼んでください'; return 1
-  fi
-  mv -f "$tmp" "$dir/client_secret.json"
+  cleanup_gws_temps
+  tmp="$(mktemp "$dir/.client_secret-XXXXXX")" || return 1
+  ( trap 'rm -f "$tmp"' EXIT
+    chmod 600 "$tmp" || exit 1
+    op read "$ref" > "$tmp" 2>/dev/null || { hint '管理者に 1Password の招待を頼んでください'; exit 1; }
+    node -e 'try{let x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(x.installed&&x.installed.client_id&&x.installed.client_secret?0:1)}catch(e){process.exit(1)}' "$tmp" 2>/dev/null || { hint '共有 OAuth 設定を確認できません'; exit 1; }
+    mv -f "$tmp" "$dir/client_secret.json"
+  )
 }
 valid_role(){ case "$1" in base|sekkei|togo|yochi|somu-keiri) return 0;; esac; return 1; }
 role_select(){
   K_ROLE="${DAIMARU_ROLE:-}"
   if [ -z "$K_ROLE" ]; then
+    K_ROLE="$(state_role)"
+    if [ -n "$K_ROLE" ] && valid_role "$K_ROLE"; then return 0; fi
     K_ROLE=base
     if ! dry_run && { [ -t 0 ] || { [ -r /dev/tty ] && [ -w /dev/tty ] && (: < /dev/tty) 2>/dev/null; }; }; then
       printf '役割 (base/sekkei/togo/yochi/somu-keiri、Enter=base): ' >&2
@@ -74,6 +79,10 @@ role_select(){
     fi
   fi
   if ! valid_role "$K_ROLE"; then err '役割名が正しくありません'; return 2; fi
+}
+state_role(){
+  [ -f "$K_STATE" ] && have node || return 0
+  node -e 'try{process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).role||"")}catch(e){}' "$K_STATE" 2>/dev/null
 }
 # shellcheck disable=SC2034 # 呼び出し側の setup/doctor が参照する値
 profile_load(){
@@ -95,9 +104,41 @@ profile_load(){
   case "$GWS_SCOPES" in *[!a-z,\ -]*) return 1;; esac
 }
 needs(){ case " $TOOLS " in *" $1 "*) return 0;; esac; return 1; }
+install_pkg(){
+  case "$K_PM" in
+    brew) brew install "$1";;
+    apt)
+      # shellcheck disable=SC2086 # 複数のパッケージ名を別引数にする
+      sudo apt-get update -y >/dev/null 2>&1 && sudo apt-get install -y $2;;
+    dnf)
+      # shellcheck disable=SC2086 # 複数のパッケージ名を別引数にする
+      sudo dnf install -y $2;;
+    *) return 1;;
+  esac
+}
 state_get(){
   have node || return 1
-  node -e 'try {const s=require(process.argv[1]);if(s.role===process.argv[2]) process.stdout.write(s.steps[process.argv[3]]||"")}catch(e){}' "$K_STATE" "$K_ROLE" "$1" 2>/dev/null
+  node -e 'try {const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(s.role===process.argv[2]) process.stdout.write((s.steps||{})[process.argv[3]]||"")}catch(e){}' "$K_STATE" "$K_ROLE" "$1" 2>/dev/null
+}
+scopes_cover(){
+  local have_scopes=",$1," required="$2" scope old_ifs="$IFS"
+  IFS=,
+  for scope in $required; do case "$have_scopes" in *",$scope,"*) ;; *) IFS="$old_ifs"; return 1;; esac; done
+  IFS="$old_ifs"
+}
+state_scopes(){
+  [ -f "$K_STATE" ] && have node || return 0
+  node -e 'try{process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).gwsScopes||"")}catch(e){}' "$K_STATE" 2>/dev/null
+}
+state_set_scopes(){
+  dry_run && return 0
+  mkdir -p "${K_STATE%/*}" || return 1
+  K_STATE_SCOPES="$1" K_STATE_ROLE="$K_ROLE" node - "$K_STATE" <<'NODE'
+const fs=require('fs'),p=process.argv[2];let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){}
+if(s.role!==process.env.K_STATE_ROLE)s={role:process.env.K_STATE_ROLE,steps:{},gwsScopes:s.gwsScopes||''};
+s.gwsScopes=process.env.K_STATE_SCOPES;
+const t=p+'.tmp';fs.writeFileSync(t,JSON.stringify(s,null,2)+'\n',{mode:0o600});fs.renameSync(t,p);
+NODE
 }
 state_set(){
   dry_run && return 0
@@ -105,7 +146,7 @@ state_set(){
   mkdir -p "${K_STATE%/*}" || return 1
   K_STATE_STEP="$1" K_STATE_RESULT="$2" K_STATE_ROLE="$K_ROLE" node - "$K_STATE" <<'NODE'
 const fs=require('fs'),p=process.argv[2];let s={};try{s=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){}
-if(s.role!==process.env.K_STATE_ROLE)s={role:process.env.K_STATE_ROLE,steps:{}};
+if(s.role!==process.env.K_STATE_ROLE)s={role:process.env.K_STATE_ROLE,steps:{},gwsScopes:s.gwsScopes||''};
 s.steps[process.env.K_STATE_STEP]=process.env.K_STATE_RESULT;
 s.lastRun=new Date().toISOString();
 const t=p+'.tmp';fs.writeFileSync(t,JSON.stringify(s,null,2)+'\n',{mode:0o600});fs.renameSync(t,p);
@@ -123,21 +164,33 @@ run_step(){ # name, check-function, action-function
 }
 valid_skill(){ case "$1" in ''|*[!a-zA-Z0-9-]*) return 1;; esac; return 0; }
 copy_skills(){
-  local hub="$1" role="$2" list name
+  local hub="$1" role="$2" list name workspace item
   [ -d "$hub/.claude/skills" ] || return 1
   if [ ! -f "$hub/profiles/$role.json" ]; then return 0; fi
   have node || return 1
-  list="$(node -e 'try{const a=require(process.argv[1]).skills;if(!Array.isArray(a)||a.some(x=>typeof x!=="string"||!/^[A-Za-z0-9-]+$/.test(x)))process.exit(2);a.forEach(x=>console.log(x))}catch(e){process.exit(2)}' "$hub/profiles/$role.json")" || return 1
-  mkdir -p "$HOME/.claude/skills" || return 1
+  list="$(node -e 'try{const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).skills;if(!Array.isArray(a)||a.some(x=>typeof x!=="string"||!/^[A-Za-z0-9-]+$/.test(x)))process.exit(2);a.forEach(x=>console.log(x))}catch(e){process.exit(2)}' "$hub/profiles/$role.json")" || return 1
+  workspace="$HOME/.config/daimaru-setup/workspaces/$role"
+  mkdir -p "$workspace/.claude" || return 1
+  rm -rf "$workspace/.claude/skills" || return 1
+  mkdir -p "$workspace/.claude/skills" || return 1
+  for item in "$hub/.claude/"*; do
+    [ -e "$item" ] || continue
+    [ "${item##*/}" = skills ] && continue
+    rm -rf "$workspace/.claude/${item##*/}" || return 1
+    ln -s "$item" "$workspace/.claude/${item##*/}" || return 1
+  done
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     valid_skill "$name" || return 1
     [ -d "$hub/.claude/skills/$name" ] || return 1
-    rm -rf "$HOME/.claude/skills/$name" || return 1
-    cp -R "$hub/.claude/skills/$name" "$HOME/.claude/skills/$name" || return 1
+    ln -s "$hub/.claude/skills/$name" "$workspace/.claude/skills/$name" || return 1
   done <<EOF
 $list
 EOF
+}
+role_workspace(){
+  if [ -f "$1/profiles/$2.json" ]; then printf '%s/.config/daimaru-setup/workspaces/%s' "$HOME" "$2"
+  else printf '%s' "$1"; fi
 }
 chrome_extension_state(){
   local root="$1" f

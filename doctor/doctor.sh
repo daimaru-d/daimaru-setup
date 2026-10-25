@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 set -uo pipefail
-D_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+D_SOURCE="${BASH_SOURCE[0]:-}"
+if [ -n "$D_SOURCE" ]; then
+  D_HERE="$(cd "$(dirname "$D_SOURCE")/.." 2>/dev/null && pwd || pwd)"
+else
+  D_HERE="$PWD"
+fi
 D_ROOT="${DAIMARU_SETUP_ROOT:-$D_HERE}"
 D_BASE="${DAIMARU_SETUP_BASE:-https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main}"
 case "$D_BASE" in https://*) ;; file://*) [ "${DAIMARU_SETUP_ALLOW_FILE:-0}" = 1 ] || { echo 'DAIMARU_DOCTOR: FAIL missing=base'; exit 2; };; *) echo 'DAIMARU_DOCTOR: FAIL missing=base'; exit 2;; esac
@@ -14,7 +19,7 @@ fi
 # shellcheck source=lib/common.sh
 . "$D_ROOT/lib/common.sh"
 if [ -z "${DAIMARU_ROLE:-}" ] && [ -f "$K_STATE" ] && have node; then
-  DAIMARU_ROLE="$(node -e 'try{process.stdout.write(require(process.argv[1]).role||"")}catch(e){}' "$K_STATE" 2>/dev/null)"
+  DAIMARU_ROLE="$(state_role)"
 fi
 DAIMARU_ROLE="${DAIMARU_ROLE:-base}"
 if ! valid_role "$DAIMARU_ROLE"; then echo 'DAIMARU_DOCTOR: FAIL missing=role'; exit 2; fi
@@ -75,6 +80,9 @@ else
   else fail_item hub 'daimaru-skills が見つかりません' 'セットアップをもう一度実行'; fi
 fi
 if needs gws; then
+  if ! scopes_cover "$(state_scopes)" "$GWS_SCOPES"; then
+    fail_item gws-scopes 'gws: この役割の認可スコープが記録されていません' "gws auth login -s $GWS_SCOPES を実行"
+  fi
   if network_skip; then skip_item 'gws 実 API'
   elif have gws; then
     D_GWS_ERR="$(mktemp "${TMPDIR:-/tmp}/daimaru-gws.XXXXXX")"

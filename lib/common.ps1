@@ -26,8 +26,29 @@ function Have([string]$Name) { return [bool](Get-Command $Name -ErrorAction Sile
 function Is-DryRun { return ($env:DAIMARU_DRY_RUN -eq '1') }
 function Is-Update { return ($env:DAIMARU_UPDATE -eq '1') }
 function Valid-Role([string]$Role) { return @('base','sekkei','togo','yochi','somu-keiri').Contains($Role) }
+function Get-StateRole {
+  try { if (-not (Test-Path $script:KState)) { return $null }; return (Get-Content $script:KState -Raw | ConvertFrom-Json).role } catch { return $null }
+}
+function Get-StateScopes {
+  try { if (-not (Test-Path $script:KState)) { return $null }; return (Get-Content $script:KState -Raw | ConvertFrom-Json).gwsScopes } catch { return $null }
+}
+function Test-Scopes([string]$Granted,[string]$Required) {
+  foreach ($scope in ($Required -split ',')) { if ($scope -and @($Granted -split ',') -notcontains $scope) { return $false } }
+  return $true
+}
+function Set-StateScopes([string]$Scopes) {
+  if (Is-DryRun) { return }
+  $dir=Split-Path $script:KState -Parent
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  try { if (Test-Path $script:KState) { $s=Get-Content $script:KState -Raw | ConvertFrom-Json } else { $s=$null } } catch { $s=$null }
+  if (-not $s) { $s=[pscustomobject]@{role=$script:KRole;steps=[pscustomobject]@{};lastRun=''} }
+  if ($s.role -ne $script:KRole) { $s.role=$script:KRole; $s.steps=[pscustomobject]@{} }
+  $s | Add-Member -NotePropertyName gwsScopes -NotePropertyValue $Scopes -Force
+  [IO.File]::WriteAllText($script:KState,($s | ConvertTo-Json -Depth 8) + "`n",(New-Object Text.UTF8Encoding($false)))
+}
 function Select-Role {
   $script:KRole = $env:DAIMARU_ROLE
+  if (-not $script:KRole) { $script:KRole = Get-StateRole; if (-not (Valid-Role $script:KRole)) { $script:KRole=$null } }
   if (-not $script:KRole) {
     $script:KRole = 'base'
     if (-not (Is-DryRun) -and [Environment]::UserInteractive -and $Host.Name -eq 'ConsoleHost') {
@@ -66,7 +87,8 @@ function Set-StateStep([string]$Name,[string]$Result) {
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
   $s = $null
   try { $s = Get-Content $script:KState -Raw | ConvertFrom-Json } catch { }
-  if (-not $s -or $s.role -ne $script:KRole) { $s = [pscustomobject]@{role=$script:KRole;steps=[pscustomobject]@{};lastRun=''} }
+  if (-not $s) { $s = [pscustomobject]@{role=$script:KRole;steps=[pscustomobject]@{};lastRun=''} }
+  elseif ($s.role -ne $script:KRole) { $s.role=$script:KRole; $s.steps=[pscustomobject]@{} }
   $s.steps | Add-Member -NotePropertyName $Name -NotePropertyValue $Result -Force
   $s.lastRun = [DateTime]::UtcNow.ToString('o')
   $json = $s | ConvertTo-Json -Depth 8
@@ -133,14 +155,32 @@ function Set-PrivateAcl([string]$Path,[bool]$Directory) {
     return $true
   } catch { return $false }
 }
+function Get-RoleWorkspace([string]$Hub,[string]$Role) {
+  if (Test-Path (Join-Path $Hub "profiles\$Role.json")) { return (Join-Path (Join-Path $env:APPDATA 'daimaru-setup\workspaces') $Role) }
+  return $Hub
+}
+function Clear-GwsTemps {
+  $dir=if ($env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR) { $env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR } else { Join-Path $HOME '.config\gws' }
+  if (Test-Path $dir) { Get-ChildItem $dir -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '.client_secret-*' -or $_.Name -eq '.op-error.tmp' } | Remove-Item -Force -ErrorAction SilentlyContinue }
+}
 function Copy-RoleSkills([string]$Hub,[string]$Role) {
   $file = Join-Path $Hub "profiles\$Role.json"
   if (-not (Test-Path $file)) { return $true }
   try { $data = Get-Content $file -Raw | ConvertFrom-Json } catch { return $false }
   if ($null -eq $data.skills -or $data.skills -is [string]) { return $false }
   foreach ($name in $data.skills) { if ($name -isnot [string] -or $name -notmatch '^[A-Za-z0-9-]+$') { return $false } }
-  $dest = Join-Path $HOME '.claude\skills'
+  $workspace=Get-RoleWorkspace $Hub $Role
+  $config=Join-Path $workspace '.claude'
+  $dest=Join-Path $config 'skills'
+  New-Item -ItemType Directory -Force -Path $config | Out-Null
+  if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
   New-Item -ItemType Directory -Force -Path $dest | Out-Null
+  foreach ($item in Get-ChildItem (Join-Path $Hub '.claude') -Force) {
+    if ($item.Name -eq 'skills') { continue }
+    $target=Join-Path $config $item.Name
+    if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+    Copy-Item -Path $item.FullName -Destination $target -Recurse -Force
+  }
   foreach ($name in $data.skills) {
     $source = Join-Path $Hub ".claude\skills\$name"
     if (-not (Test-Path $source -PathType Container)) { return $false }

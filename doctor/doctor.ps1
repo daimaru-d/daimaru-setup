@@ -1,23 +1,23 @@
-﻿# PowerShell 5.1 doctor。setup.ps1 からも単独でも実行できる。
+# PowerShell 5.1 doctor。setup.ps1 からも単独でも実行できる。
 $script:DoctorBase = if ($env:DAIMARU_SETUP_BASE) { $env:DAIMARU_SETUP_BASE.TrimEnd('/') } else { 'https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main' }
-if ($script:DoctorBase -notmatch '^https://' -and -not ($env:DAIMARU_SETUP_ALLOW_FILE -eq '1' -and $script:DoctorBase -match '^file://')) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=base'; return }
+if ($script:DoctorBase -notmatch '^https://' -and -not ($env:DAIMARU_SETUP_ALLOW_FILE -eq '1' -and $script:DoctorBase -match '^file://')) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=base'; if ($PSCommandPath) { exit 2 } else { return } }
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
-if ($env:OS -eq 'Windows_NT') { try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { Write-Host '実行ポリシーを変更できません。診断を中止します'; return } }
+if ($env:OS -eq 'Windows_NT') { try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { Write-Host '実行ポリシーは組織設定に従います。診断を続行します' } }
 $script:DoctorRoot = if ($env:DAIMARU_SETUP_ROOT) { $env:DAIMARU_SETUP_ROOT } elseif ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { $null }
 if (-not $script:DoctorRoot -or -not (Test-Path (Join-Path $script:DoctorRoot 'lib\common.ps1'))) {
   $script:DoctorRoot=Join-Path ([IO.Path]::GetTempPath()) ('daimaru-doctor-' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force -Path (Join-Path $script:DoctorRoot 'lib'),(Join-Path $script:DoctorRoot 'profiles') | Out-Null
-  try { Invoke-WebRequest "$script:DoctorBase/lib/common.ps1" -OutFile (Join-Path $script:DoctorRoot 'lib\common.ps1') -UseBasicParsing -ErrorAction Stop } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=common'; return }
+  try { Invoke-WebRequest "$script:DoctorBase/lib/common.ps1" -OutFile (Join-Path $script:DoctorRoot 'lib\common.ps1') -UseBasicParsing -ErrorAction Stop } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=common'; if ($PSCommandPath) { exit 2 } else { return } }
 }
-if (-not (Get-Command Load-Profile -ErrorAction SilentlyContinue)) { try { . (Join-Path $script:DoctorRoot 'lib\common.ps1') } catch { Write-Host '共通部品を読み込めません。診断を中止します'; return } }
+try { . (Join-Path $script:DoctorRoot 'lib\common.ps1') } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=common'; if ($PSCommandPath) { exit 2 } else { return } }
 $script:DoctorRole = $env:DAIMARU_ROLE
-if (-not $script:DoctorRole) { try { $script:DoctorRole=(Get-Content $script:KState -Raw | ConvertFrom-Json).role } catch { } }
+if (-not $script:DoctorRole) { $script:DoctorRole=Get-StateRole }
 if (-not $script:DoctorRole) { $script:DoctorRole='base' }
-if (-not (Valid-Role $script:DoctorRole)) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=role'; exit 2 }
+if (-not (Valid-Role $script:DoctorRole)) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=role'; if ($PSCommandPath) { exit 2 } else { return } }
 $script:KRole=$script:DoctorRole
 $profilePath=Join-Path $script:DoctorRoot "profiles\$script:DoctorRole.env"
-if (-not (Test-Path $profilePath)) { try { Invoke-WebRequest "$script:DoctorBase/profiles/$script:DoctorRole.env" -OutFile $profilePath -UseBasicParsing -ErrorAction Stop } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=profile'; return } }
-if (-not (Load-Profile $profilePath)) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=profile'; return }
+if (-not (Test-Path $profilePath)) { try { Invoke-WebRequest "$script:DoctorBase/profiles/$script:DoctorRole.env" -OutFile $profilePath -UseBasicParsing -ErrorAction Stop } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=profile'; if ($PSCommandPath) { exit 2 } else { return } } }
+if (-not (Load-Profile $profilePath)) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=profile'; if ($PSCommandPath) { exit 2 } else { return } }
 $script:Missing=New-Object 'System.Collections.Generic.List[string]'
 function Doctor-Fail([string]$Slug,[string]$Message,[string]$Fix) { Err $Message; $script:Missing.Add($Slug); Hint $Fix }
 function Doctor-Skip([string]$Message) { Warn "$Message`: 省略" }
@@ -49,6 +49,7 @@ else {
   } else { Doctor-Fail 'hub' 'daimaru-skills が見つかりません' 'セットアップをもう一度実行してください' }
 }
 if (Needs 'gws') {
+  if (-not (Test-Scopes (Get-StateScopes) $script:KProfile.GWS_SCOPES)) { Doctor-Fail 'gws-scopes' 'gws: この役割の認可スコープが記録されていません' "gws auth login -s $($script:KProfile.GWS_SCOPES) を実行してください" }
   if ($env:DAIMARU_DOCTOR_SKIP_NETWORK -eq '1') { Doctor-Skip 'gws 実 API' }
   elseif (Have gws.cmd) {
     $errFile=Join-Path ([IO.Path]::GetTempPath()) ('gws-doctor-' + [guid]::NewGuid().ToString('N'))
@@ -92,6 +93,6 @@ foreach ($dir in @((Join-Path $HOME 'Downloads'),(Join-Path $HOME 'Desktop'))) {
   if (-not (Test-Path $dir)) { continue }
   Get-ChildItem $dir -Recurse -Depth 1 -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'client_secret*.json' -or $_.Name -eq '.env' } | ForEach-Object { Warn "機密ファイル候補: $($_.FullName)"; Hint '不要なら安全な場所へ移し、元のファイルを削除してください' }
 }
-if ($script:Missing.Count -eq 0) { Write-Host 'DAIMARU_DOCTOR: PASS'; exit 0 }
+if ($script:Missing.Count -eq 0) { Write-Host 'DAIMARU_DOCTOR: PASS'; if ($PSCommandPath) { exit 0 } else { return } }
 Write-Host ('DAIMARU_DOCTOR: FAIL missing=' + ($script:Missing -join ','))
-exit 2
+if ($PSCommandPath) { exit 2 } else { return }

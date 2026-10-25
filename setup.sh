@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 # macOS / Linux の一回セットアップ。curl | bash とローカル実行の両方に対応。
 set -uo pipefail
-K_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
+K_SOURCE="${BASH_SOURCE[0]:-}"
+K_HERE=''
+if [ -n "$K_SOURCE" ]; then K_HERE="$(cd "$(dirname "$K_SOURCE")" 2>/dev/null && pwd || pwd)"; fi
 K_BASE="${DAIMARU_SETUP_BASE:-https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main}"
 case "$K_BASE" in https://*) ;; file://*) [ "${DAIMARU_SETUP_ALLOW_FILE:-0}" = 1 ] || { echo 'DAIMARU_SETUP_BASE は https:// のみ指定できます' >&2; exit 2; };; *) echo 'DAIMARU_SETUP_BASE は https:// のみ指定できます' >&2; exit 2;; esac
 K_TMP=''
 if [ -f "$K_HERE/lib/common.sh" ] && [ -d "$K_HERE/profiles" ]; then
   K_ROOT="$K_HERE"
 elif [ "${DAIMARU_DRY_RUN:-0}" = 1 ]; then
-  case "${DAIMARU_ROLE:-base}" in base|sekkei|togo|yochi|somu-keiri) ;; *) echo '役割名が正しくありません' >&2; exit 2;; esac
-  echo "予定: ${DAIMARU_ROLE:-base} の準備（オンラインのプロファイル取得を省略）"
+  K_PREVIEW_ROLE="${DAIMARU_ROLE:-base}"
+  if [ -z "${DAIMARU_ROLE:-}" ] && [ -f "$HOME/.config/daimaru-setup/state.json" ] && command -v node >/dev/null 2>&1; then
+    K_PREVIEW_ROLE="$(node -e 'try{process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).role||"base")}catch(e){process.stdout.write("base")}' "$HOME/.config/daimaru-setup/state.json")"
+  fi
+  case "$K_PREVIEW_ROLE" in base|sekkei|togo|yochi|somu-keiri) ;; *) echo '役割名が正しくありません' >&2; exit 2;; esac
+  echo "予定: $K_PREVIEW_ROLE の準備（オンラインのプロファイル取得を省略）"
   echo '予定: Claude Code / Git / Node.js / GitHub CLI / daimaru-skills / doctor'
-  case "${DAIMARU_ROLE:-base}" in
+  case "$K_PREVIEW_ROLE" in
     sekkei) echo '予定: VS Code / gws / Chrome / 1Password / Chrome 拡張の案内';;
     togo) echo '予定: gws / clasp / gcloud / ADC / 1Password';;
     yochi) echo '予定: gws / 1Password';;
@@ -38,16 +44,9 @@ say "==> ${ROLE_LABEL} の準備"
 if needs gws && ! dry_run; then check_gws_secret >/dev/null 2>&1 || true; fi
 case "$(uname -s)" in Darwin) K_OS=mac;; Linux) K_OS=linux;; *) K_OS=other;; esac
 K_HUB="$HOME/daimaru-skills"
+if ! dry_run; then cleanup_gws_temps; fi
 export PATH="$HOME/.local/bin:$HOME/google-cloud-sdk/bin:$PATH"
 if have brew; then K_PM=brew; elif have apt-get; then K_PM=apt; elif have dnf; then K_PM=dnf; else K_PM=none; fi
-install_pkg(){
-  case "$K_PM" in
-    brew) brew install "$1";;
-    apt) sudo apt-get update -y >/dev/null 2>&1 && sudo apt-get install -y "$2";;
-    dnf) sudo dnf install -y "$2";;
-    *) return 1;;
-  esac
-}
 check_claude(){ have claude; }
 install_claude(){ curl -fsSL https://claude.ai/install.sh | bash; }
 check_git(){ have git; }; install_git(){ install_pkg git git; }
@@ -57,10 +56,12 @@ check_gh_auth(){ have gh && gh auth status >/dev/null 2>&1 && gh api repos/daima
 login_gh(){
   have gh || return 1
   gh auth status >/dev/null 2>&1 || gh auth login --hostname github.com --git-protocol https --web || return 1
-  gh auth setup-git >/dev/null 2>&1 || true
   gh api repos/daimaru-d/daimaru-skills >/dev/null 2>&1 || { hint '管理者に daimaru-d の read 権限を依頼してください'; return 1; }
 }
-check_hub(){ [ -d "$K_HUB/.git" ]; }
+check_hub(){
+  [ -d "$K_HUB/.git" ] || return 1
+  if [ -f "$K_HUB/.gitmodules" ]; then (cd "$K_HUB" && git submodule update --init --recursive) || return 1; fi
+}
 clone_hub(){ have git && git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git "$K_HUB"; }
 check_never(){ return 1; }
 update_hub(){
@@ -77,11 +78,12 @@ install_op(){
 }
 check_gws(){ have gws; }
 install_gws(){ have npm && npm i -g @googleworkspace/cli >/dev/null 2>&1; }
-check_gws_auth(){ have gws && gws drive files list --params '{"pageSize":1,"fields":"files(id)"}' >/dev/null 2>&1; }
+check_gws_auth(){ have gws && scopes_cover "$(state_scopes)" "$GWS_SCOPES" && gws drive files list --params '{"pageSize":1,"fields":"files(id)"}' >/dev/null 2>&1; }
 login_gws(){
   check_gws_secret || { hint '管理者に 1Password の招待を頼んでください'; return 1; }
-  gws auth login -s "$GWS_SCOPES" >/dev/null || return 1
-  check_gws_auth
+  gws auth login -s "$GWS_SCOPES" || return 1
+  gws drive files list --params '{"pageSize":1,"fields":"files(id)"}' >/dev/null 2>&1 || return 1
+  state_set_scopes "$GWS_SCOPES"
 }
 check_vscode(){ have code || [ -x '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code' ]; }
 install_vscode(){
@@ -119,10 +121,9 @@ show_chrome_extension(){
   fi
   return 1
 }
-check_skills(){ update_only && return 1; [ ! -f "$K_HUB/profiles/$K_ROLE.json" ] || [ -f "$HOME/.claude/skills/.daimaru-$K_ROLE" ]; }
+check_skills(){ [ ! -f "$K_HUB/profiles/$K_ROLE.json" ] && return 0; return 1; }
 install_skills(){
   copy_skills "$K_HUB" "$K_ROLE" || return 1
-  if [ -f "$K_HUB/profiles/$K_ROLE.json" ]; then touch "$HOME/.claude/skills/.daimaru-$K_ROLE"; fi
 }
 check_clasp(){ have clasp; }; install_clasp(){ have npm && npm install -g @google/clasp >/dev/null 2>&1; }
 check_clasp_auth(){ [ -f "$HOME/.clasprc.json" ]; }; login_clasp(){ have clasp && clasp login; }
@@ -141,6 +142,7 @@ run_step git check_git install_git || true
 run_step node check_node install_node || true
 run_step gh check_gh install_gh || true
 run_step gh-access check_gh_auth login_gh || true
+if ! dry_run && have gh; then gh auth setup-git >/dev/null 2>&1 || true; fi
 run_step hub check_hub clone_hub || true
 if update_only; then run_step hub-update check_never update_hub || true; fi
 run_step npm-ci check_npm_ci install_npm_ci || true
@@ -174,7 +176,8 @@ if [ -f "$K_ROOT/doctor/doctor.sh" ]; then
   DAIMARU_SETUP_ROOT="$K_ROOT" bash "$K_ROOT/doctor/doctor.sh" || true
 else warn 'doctor を取得できませんでした'; fi
 if [ -d "$K_HUB/.git" ] && have claude; then
-  cd "$K_HUB" || exit 0
+  cleanup_gws_temps
+  cd "$(role_workspace "$K_HUB" "$K_ROLE")" || exit 0
   exec claude --permission-mode acceptEdits
 fi
 warn 'Claude または道具箱が未導入です。doctor の案内を確認してください'

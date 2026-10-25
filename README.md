@@ -23,15 +23,17 @@
 
 例: macOS / Linux は `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh | DAIMARU_ROLE=sekkei bash`、Windows は `$env:DAIMARU_ROLE='sekkei'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 | iex` を実行します。役割を指定しなければ対話端末から選べます。
 
+役割の選択は次回以降も保存されます。役割プロファイルがある場合、Claude は `~/.config/daimaru-setup/workspaces/<役割>`（Windows は `%APPDATA%\daimaru-setup\workspaces\<役割>`）から起動します。この作業ディレクトリの `.claude/skills` には選んだ役割のスキルだけを配置し、hub 本体は変更しません。
+
 ## うまくいっているか確かめる
 
 doctor という診断を実行すると、できていない所とその直し方が1行ずつ表示されます。最後の行が DAIMARU_DOCTOR: PASS なら準備は完了です。FAIL と出た場合は、表示された行をそのまま管理者に伝えてください。
 | 操作 | macOS / Linux | Windows PowerShell |
 |:--|:--|:--|
-| 予定だけ表示 | `DAIMARU_DRY_RUN=1 DAIMARU_ROLE=sekkei bash setup.sh` | `$env:DAIMARU_DRY_RUN='1'; .\setup.ps1` |
-| 更新 | `DAIMARU_UPDATE=1 bash setup.sh` | `$env:DAIMARU_UPDATE='1'; .\setup.ps1` |
+| 予定だけ表示 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh \| DAIMARU_DRY_RUN=1 DAIMARU_ROLE=sekkei bash` | `$env:DAIMARU_DRY_RUN='1'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 \| iex` |
+| 更新 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh \| DAIMARU_UPDATE=1 bash` | `$env:DAIMARU_UPDATE='1'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 \| iex` |
 | 診断 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.sh \| bash` | `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.ps1 \| iex` |
-| 通信せず診断 | `DAIMARU_DOCTOR_SKIP_NETWORK=1 bash doctor/doctor.sh` | `$env:DAIMARU_DOCTOR_SKIP_NETWORK='1'; .\doctor\doctor.ps1` |
+| 通信せず診断 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.sh \| DAIMARU_DOCTOR_SKIP_NETWORK=1 bash` | `$env:DAIMARU_DOCTOR_SKIP_NETWORK='1'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.ps1 \| iex` |
 
 共有 OAuth 設定が読めない場合は、管理者に 1Password の招待を頼んでください。
 

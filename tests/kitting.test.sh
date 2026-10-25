@@ -10,6 +10,7 @@ pass_n=0; fail_n=0
 pass(){ pass_n=$((pass_n+1)); printf 'ok   %s\n' "$1"; }
 fail(){ fail_n=$((fail_n+1)); printf 'FAIL %s\n' "$1"; }
 check(){ local label="$1"; shift; if "$@"; then pass "$label"; else fail "$label"; fi; }
+contains(){ case "$1" in *"$2"*) return 0;; esac; return 1; }
 for role in base sekkei togo yochi somu-keiri; do
   check "profile $role" bash -c '. "$1/lib/common.sh"; profile_load "$1/profiles/$2.env" && [ -n "$ROLE_LABEL" ] && [ -n "$TOOLS" ]' _ "$ROOT" "$role"
 done
@@ -32,6 +33,18 @@ check 'state 2回目も段は同じ' bash -c '. "$1/lib/common.sh"; K_ROLE=base;
 b="$(node -e 'let s=require(process.argv[1]);process.stdout.write(JSON.stringify(s.steps))' "$HOME/.config/daimaru-setup/state.json")"
 check 'state 冪等' test "$a" = "$b"
 check 'state は clone 先を占有しない' test ! -e "$HOME/.daimaru-setup"
+check '保存済み役割を既定に使い明示指定を優先' bash -c '. "$1/lib/common.sh"; unset DAIMARU_ROLE; role_select && [ "$K_ROLE" = base ] && DAIMARU_ROLE=togo role_select && [ "$K_ROLE" = togo ]' _ "$ROOT" </dev/null
+check '認可スコープは順序と追加を判定' bash -c '. "$1/lib/common.sh"; K_ROLE=yochi; state_set_scopes gmail,drive && scopes_cover "$(state_scopes)" drive,gmail && ! scopes_cover "$(state_scopes)" drive,gmail,calendar' _ "$ROOT"
+printf '#!/bin/sh\n"$@"\n' > "$T/bin/sudo"
+cat > "$T/bin/apt-get" <<'STUB'
+#!/bin/sh
+printf '%s|%s|%s|%s|%s\n' "$#" "$1" "$2" "$3" "$4" >> "$K_PKG_LOG"
+STUB
+cp "$T/bin/apt-get" "$T/bin/dnf"
+chmod +x "$T/bin/sudo" "$T/bin/apt-get" "$T/bin/dnf"
+export K_PKG_LOG="$T/packages.log"
+: > "$K_PKG_LOG"
+check 'Linux nodejs と npm を別引数で渡す' bash -c '. "$1/lib/common.sh"; K_PM=apt; install_pkg node "nodejs npm"; K_PM=dnf; install_pkg node "nodejs npm"; [ "$(grep -cFx "4|install|-y|nodejs|npm" "$K_PKG_LOG")" = 2 ]' _ "$ROOT"
 rm -f "$HOME/.config/daimaru-setup/state.json"
 mkdir -p "$HOME/.daimaru-setup"
 printf '{"role":"base","steps":{"legacy":"ok"}}\n' > "$HOME/.daimaru-setup/state.json"
@@ -44,6 +57,7 @@ if [ "$rc" = 0 ] && [ -f "$secret_path" ] && node -e 'process.exit((require("fs"
 chmod 644 "$secret_path"
 check '既存 OAuth 設定の権限を再び 600 にする' bash -c '. "$1/lib/common.sh"; check_gws_secret && node -e '\''process.exit((require("fs").statSync(process.argv[1]).mode&0o777)===0o600?0:1)'\'' "$2"' _ "$ROOT" "$secret_path"
 check 'op read の参照だけを引数にする' grep -qF 'ARGS=read op://Claude-Automation/gws-oauth-client/client_secret.json' "$OP_STUB_LOG"
+check '共有 OAuth が壊れていても一時ファイルを残さず既存 secret を守る' bash -c 'OP_STUB_READ_VALUE=broken PATH="$1/tests/stubs:$PATH" bash -c '\'' . "$1/lib/common.sh"; ! install_gws_secret '\'' _ "$1" >/dev/null 2>&1; [ -f "$2" ] && ! ls "${2%/*}/.client_secret-"* >/dev/null 2>&1' _ "$ROOT" "$secret_path"
 mkdir -p "$HOME/.config/daimaru-op"
 printf 'OP_VAULT=Shared-Vault\n' > "$HOME/.config/daimaru-op/config"
 check '既存 OP_VAULT に合わせる' bash -c '. "$1/lib/common.sh"; [ "$(k_op_ref)" = "op://Shared-Vault/gws-oauth-client/client_secret.json" ]' _ "$ROOT"
@@ -51,13 +65,44 @@ mkdir -p "$T/hub/.claude/skills/alpha" "$T/hub/.claude/skills/beta" "$T/hub/prof
 printf 'a' > "$T/hub/.claude/skills/alpha/SKILL.md"
 printf 'b' > "$T/hub/.claude/skills/beta/SKILL.md"
 printf '{"skills":["alpha"]}\n' > "$T/hub/profiles/base.json"
-check 'profile 指定スキルだけコピー' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && [ -f "$HOME/.claude/skills/alpha/SKILL.md" ] && [ ! -e "$HOME/.claude/skills/beta" ]' _ "$ROOT" "$T/hub"
-mkdir -p "$HOME/.claude/skills/alpha/stale"
-printf 'old' > "$HOME/.claude/skills/alpha/stale/obsolete"
-check 'スキル更新で二重ネストと古いファイルを残さない' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && [ -f "$HOME/.claude/skills/alpha/SKILL.md" ] && [ ! -e "$HOME/.claude/skills/alpha/alpha" ] && [ ! -e "$HOME/.claude/skills/alpha/stale" ]' _ "$ROOT" "$T/hub"
+printf '{}' > "$T/hub/.claude/settings.json"
+check '役割ワークスペースには指定スキルと設定だけ' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && [ -f "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/alpha/SKILL.md" ] && [ ! -e "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/beta" ] && [ -f "$HOME/.config/daimaru-setup/workspaces/base/.claude/settings.json" ] && [ "$(role_workspace "$2" base)" = "$HOME/.config/daimaru-setup/workspaces/base" ]' _ "$ROOT" "$T/hub"
+check 'スキル更新で二重ネストしない' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && [ -f "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/alpha/SKILL.md" ] && [ ! -e "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/alpha/alpha" ]' _ "$ROOT" "$T/hub"
 check 'profile json が無ければ従来どおり' bash -c '. "$1/lib/common.sh"; copy_skills "$2" sekkei' _ "$ROOT" "$T/hub"
 printf '{"skills":["../beta"]}\n' > "$T/hub/profiles/base.json"
-check '不正スキル名を拒否' bash -c '. "$1/lib/common.sh"; ! copy_skills "$2" base && [ ! -e "$HOME/.claude/skills/beta" ]' _ "$ROOT" "$T/hub"
+check '不正スキル名を拒否' bash -c '. "$1/lib/common.sh"; ! copy_skills "$2" base && [ ! -e "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/beta" ]' _ "$ROOT" "$T/hub"
+printf '{"skills":["beta"]}\n' > "$T/hub/profiles/sekkei.json"
+check '役割を変えても別役割のスキルを読まない' bash -c '. "$1/lib/common.sh"; copy_skills "$2" sekkei && [ -f "$HOME/.config/daimaru-setup/workspaces/sekkei/.claude/skills/beta/SKILL.md" ] && [ ! -e "$HOME/.config/daimaru-setup/workspaces/sekkei/.claude/skills/alpha" ]' _ "$ROOT" "$T/hub"
+mkdir -p "$HOME/daimaru-skills/.git" "$HOME/daimaru-skills/profiles" "$HOME/daimaru-skills/.claude/skills/alpha" "$HOME/.config/gws"
+printf 'x' > "$HOME/daimaru-skills/.gitmodules"
+printf '{"skills":["alpha"]}\n' > "$HOME/daimaru-skills/profiles/base.json"
+printf 'a' > "$HOME/daimaru-skills/.claude/skills/alpha/SKILL.md"
+printf 'stale' > "$HOME/.config/gws/.client_secret-old"
+printf 'stale' > "$HOME/.config/gws/.op-error.tmp"
+printf '#!/bin/sh\nprintf "gh %%s\\n" "$*" >> "$K_CALL_LOG"\n' > "$T/bin/gh"
+printf '#!/bin/sh\nprintf "git %%s\\n" "$*" >> "$K_CALL_LOG"\n' > "$T/bin/git"
+printf '#!/bin/sh\nif [ "$1" = auth ]; then exit 0; fi\npwd >> "$K_CLAUDE_LOG"\n' > "$T/bin/claude"
+chmod +x "$T/bin/gh" "$T/bin/git" "$T/bin/claude"
+export K_CALL_LOG="$T/calls.log" K_CLAUDE_LOG="$T/claude.log"
+: > "$K_CALL_LOG"; : > "$K_CLAUDE_LOG"
+DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 bash "$ROOT/setup.sh" >"$T/setup-run.log" 2>&1
+check '認証済み gh でも setup-git を毎回実行' grep -qFx 'gh auth setup-git' "$K_CALL_LOG"
+check '既存 hub の submodule を通常再実行で初期化' grep -qFx 'git submodule update --init --recursive' "$K_CALL_LOG"
+check 'Claude を役割ワークスペースで起動' bash -c '[ "$(cd "$1" && pwd -P)" = "$(cd "$2" && pwd -P)" ]' _ "$HOME/.config/daimaru-setup/workspaces/base" "$(tail -1 "$K_CLAUDE_LOG")"
+check '起動時に古い秘密一時ファイルを掃除' bash -c '[ ! -e "$1/.client_secret-old" ] && [ ! -e "$1/.op-error.tmp" ]' _ "$HOME/.config/gws"
+mkdir -p "$HOME/.claude/skills/op-secrets/scripts"
+: > "$HOME/.claude/skills/op-secrets/scripts/op-doctor.sh"
+printf '#!/bin/sh\nprintf "gws %%s\\n" "$*" >> "$K_CALL_LOG"\n' > "$T/bin/gws"
+chmod +x "$T/bin/gws"
+check '古い Drive 認可だけを state に記録' bash -c '. "$1/lib/common.sh"; K_ROLE=yochi; state_set_scopes drive' _ "$ROOT"
+: > "$K_CALL_LOG"
+DAIMARU_ROLE=yochi DAIMARU_DOCTOR_SKIP_NETWORK=1 bash "$ROOT/setup.sh" >"$T/yochi-run.log" 2>&1
+check '追加スコープが必要なら gws に再ログイン' grep -qFx 'gws auth login -s gmail,drive' "$K_CALL_LOG"
+check 'gws 認可成功後にスコープを state へ保存' bash -c '. "$1/lib/common.sh"; scopes_cover "$(state_scopes)" gmail,drive' _ "$ROOT"
+: > "$K_CALL_LOG"
+DAIMARU_UPDATE=1 bash "$ROOT/setup.sh" >"$T/update-run.log" 2>&1
+check 'DAIMARU_UPDATE の役割は保存済みの役割' grep -q '用地 の準備' "$T/update-run.log"
+check '更新だけの再実行でも gh setup-git' grep -qFx 'gh auth setup-git' "$K_CALL_LOG"
 mkdir -p "$HOME/Downloads"
 printf 'FAKE_SECRET_MUST_NOT_PRINT' > "$HOME/Downloads/client_secret-test.json"
 out="$(DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 bash "$ROOT/doctor/doctor.sh" 2>&1)"; rc=$?
@@ -66,10 +111,17 @@ if [[ "$last" =~ ^DAIMARU_DOCTOR:\ (PASS|FAIL\ missing=[a-z0-9,-]+)$ ]] && { [ "
 if [[ "$out" != *FAKE_SECRET_MUST_NOT_PRINT* ]]; then pass 'doctor は秘密の中身を出さない'; else fail 'doctor は秘密の中身を出さない'; fi
 out="$(DAIMARU_ROLE=togo DAIMARU_DOCTOR_SKIP_NETWORK=1 bash "$ROOT/doctor/doctor.sh" 2>&1)"
 check 'togo は clasp ログインと proxy の不足を列挙' bash -c '[[ "$1" == *"missing="* ]] && [[ "$1" == *"clasp-login"* ]] && [[ "$1" == *"cloud-sql-proxy"* ]]' _ "$out"
+check 'doctor は役割に足りない gws スコープを列挙' contains "$out" gws-scopes
 check '不正な配布 URL を拒否' bash -c 'DAIMARU_SETUP_BASE=http://example.invalid DAIMARU_DRY_RUN=1 bash "$1/setup.sh" >/dev/null 2>&1; [ $? = 2 ]' _ "$ROOT"
 check 'file URL はテスト指定時だけ許可' bash -c 'DAIMARU_SETUP_BASE=file:///tmp DAIMARU_DRY_RUN=1 bash "$1/setup.sh" >/dev/null 2>&1; [ $? = 2 ] && DAIMARU_SETUP_ALLOW_FILE=1 DAIMARU_SETUP_BASE=file:///tmp DAIMARU_DRY_RUN=1 bash "$1/setup.sh" >/dev/null 2>&1' _ "$ROOT"
 out="$(cd "$T" && PATH="${PATH#"$T/bin:"}" DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 DAIMARU_SETUP_ALLOW_FILE=1 DAIMARU_SETUP_BASE="file://$ROOT" bash < "$ROOT/doctor/doctor.sh" 2>&1)"; rc=$?
 if { [ "$rc" = 0 ] || [ "$rc" = 2 ]; } && [[ "$out" == *'daimaru-setup 診断'* ]] && [[ "$out" == *'DAIMARU_DOCTOR:'* ]]; then pass 'doctor は pipe 単独実行で共通部品を取得'; else fail 'doctor は pipe 単独実行で共通部品を取得'; fi
+mkdir -p "$T/pipe-cwd/lib" "$T/pipe-cwd/profiles"
+cp "$ROOT/lib/common.sh" "$T/pipe-cwd/lib/common.sh"
+cp "$ROOT/profiles/base.env" "$T/pipe-cwd/profiles/base.env"
+out="$(cd "$T/pipe-cwd" && DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 DAIMARU_SETUP_ALLOW_FILE=1 DAIMARU_SETUP_BASE=file:///nonexistent bash < "$ROOT/doctor/doctor.sh" 2>&1)"; rc=$?
+if { [ "$rc" = 0 ] || [ "$rc" = 2 ]; } && [[ "$out" == *'daimaru-setup 診断'* ]]; then pass 'doctor の pipe 実行は現在ディレクトリを基準にする'; else fail 'doctor の pipe 実行は現在ディレクトリを基準にする'; fi
+check 'pipe 実行の stderr に unbound がない' bash -c 'cd "$1"; DAIMARU_DRY_RUN=1 bash < "$2/setup.sh" 2>"$1/setup.err" >/dev/null; DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 DAIMARU_SETUP_ALLOW_FILE=1 DAIMARU_SETUP_BASE="file://$2" bash < "$2/doctor/doctor.sh" 2>"$1/doctor.err" >/dev/null; ! grep -Ei "unbound|BASH_SOURCE" "$1/setup.err" "$1/doctor.err"' _ "$T" "$ROOT"
 for file in "$ROOT/setup.sh" "$ROOT/lib/common.sh" "$ROOT/doctor/doctor.sh" "$ROOT/tests/kitting.test.sh"; do check "bash -n ${file#"$ROOT"/}" bash -n "$file"; done
 if [ -x /bin/bash ] && /bin/bash --version | head -1 | grep -q 'version 3'; then
   for file in "$ROOT/setup.sh" "$ROOT/lib/common.sh" "$ROOT/doctor/doctor.sh"; do check "bash 3.2 -n ${file#"$ROOT"/}" /bin/bash -n "$file"; done
@@ -86,15 +138,34 @@ if command -v pwsh >/dev/null 2>&1; then
   while IFS= read -r file; do
     check "PowerShell parse ${file#"$ROOT"/}" env K_PARSE_FILE="$file" pwsh -NoProfile -Command '$e=$null; [System.Management.Automation.Language.Parser]::ParseFile($env:K_PARSE_FILE,[ref]$null,[ref]$e) | Out-Null; if ($e.Count) { $e | Out-String | Write-Host; exit 1 }'
   done < <(find "$ROOT" -name '*.ps1' -type f -print)
-  check 'PowerShell スキル更新は二重ネストしない' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_TEST_HUB="$T/hub" pwsh -NoProfile -Command '$ErrorActionPreference="Stop"; . $env:K_COMMON_FILE; if (-not (Copy-RoleSkills $env:K_TEST_HUB base)) { exit 1 }; if (Test-Path (Join-Path $HOME ".claude/skills/alpha/alpha")) { exit 1 }'
+  check 'PowerShell スキル更新は二重ネストしない' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_TEST_HUB="$T/hub" pwsh -NoProfile -Command '$ErrorActionPreference="Stop"; . $env:K_COMMON_FILE; if (-not (Copy-RoleSkills $env:K_TEST_HUB base)) { exit 1 }; $w=Get-RoleWorkspace $env:K_TEST_HUB base; if (-not (Test-Path (Join-Path $w ".claude/skills/alpha/SKILL.md")) -or (Test-Path (Join-Path $w ".claude/skills/alpha/alpha")) -or (Test-Path (Join-Path $w ".claude/skills/beta"))) { exit 1 }'
   check 'PowerShell 5.1 用 gws JSON エスケープ' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_EXPECTED_GWS='{\"pageSize\":1,\"fields\":\"files(id)\"}' pwsh -NoProfile -Command '. $env:K_COMMON_FILE; $PSVersionTable.PSVersion=[version]"5.1"; function Invoke-Cli([string]$Name,[string[]]$CliArgs) { $CliArgs[-1] }; if ((Invoke-Gws @("drive","files","list")) -cne $env:K_EXPECTED_GWS) { exit 1 }'
   printf '\357\273\277Write-Output "UTF8"\n' > "$T/remote.ps1"
   check 'PowerShell の再取得コードは先頭 BOM を除く' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_REMOTE_FILE="file://$T/remote.ps1" pwsh -NoProfile -Command '. $env:K_COMMON_FILE; $code=Get-RemoteScript $env:K_REMOTE_FILE; if ($code[0] -eq [char]0xFEFF -or (Invoke-Expression $code) -ne "UTF8") { exit 1 }'
   out="$(APPDATA="$T/appdata" DAIMARU_SETUP_ROOT='' DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 K_SOURCE_ROOT="$ROOT" K_DOCTOR_FILE="$ROOT/doctor/doctor.ps1" pwsh -NoProfile -Command 'function Invoke-WebRequest { param([string]$Uri,[string]$OutFile,[switch]$UseBasicParsing) $rel=if ($Uri -match "/lib/common.ps1$") { "lib/common.ps1" } elseif ($Uri -match "/profiles/base.env$") { "profiles/base.env" } else { throw "unexpected URL" }; Copy-Item (Join-Path $env:K_SOURCE_ROOT $rel) $OutFile }; Invoke-Expression ([IO.File]::ReadAllText($env:K_DOCTOR_FILE,[Text.Encoding]::UTF8))' 2>&1)"; rc=$?
   if { [ "$rc" = 0 ] || [ "$rc" = 2 ]; } && [[ "$out" == *'daimaru-setup 診断'* ]] && [[ "$out" == *'DAIMARU_DOCTOR:'* ]]; then pass 'PowerShell doctor は iex 単独実行で共通部品を取得'; else fail 'PowerShell doctor は iex 単独実行で共通部品を取得'; fi
+  out="$(APPDATA="$T/appdata" DAIMARU_SETUP_ROOT="$ROOT" DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 K_DOCTOR_FILE="$ROOT/doctor/doctor.ps1" pwsh -NoProfile -Command '$s=[IO.File]::ReadAllText($env:K_DOCTOR_FILE,[Text.Encoding]::UTF8); iex $s; iex $s; Write-Output HOST_ALIVE' 2>&1)"
+  check 'PowerShell doctor の iex を2回呼んでもホストが続く' bash -c '[[ "$1" == *HOST_ALIVE* ]] && [ "$(printf "%s\n" "$1" | grep -c DAIMARU_DOCTOR:)" = 2 ]' _ "$out"
+  APPDATA="$T/appdata" DAIMARU_SETUP_ROOT="$ROOT" DAIMARU_ROLE=invalid pwsh -NoProfile -File "$ROOT/doctor/doctor.ps1" >/dev/null 2>&1; rc=$?
+  check 'PowerShell doctor の -File は終了コード 2' [ "$rc" = 2 ]
+  APPDATA="$T/appdata" DAIMARU_SETUP_BASE=http://example.invalid pwsh -NoProfile -File "$ROOT/doctor/doctor.ps1" >/dev/null 2>&1; rc=$?
+  check 'PowerShell doctor の早期失敗も -File は終了コード 2' [ "$rc" = 2 ]
+  out="$(APPDATA="$T/appdata" DAIMARU_SETUP_BASE=http://example.invalid K_DOCTOR_FILE="$ROOT/doctor/doctor.ps1" pwsh -NoProfile -Command 'iex ([IO.File]::ReadAllText($env:K_DOCTOR_FILE,[Text.Encoding]::UTF8)); Write-Output HOST_ALIVE' 2>&1)"; rc=$?
+  check 'PowerShell doctor の早期失敗でも iex 呼び出し元は生存' bash -c '[[ "$1" == *HOST_ALIVE* && "$1" == *"DAIMARU_DOCTOR: FAIL missing=base"* ]] && [ "$2" = 0 ]' _ "$out" "$rc"
+  check 'PowerShell 保存済み役割と追加スコープを判定' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" pwsh -NoProfile -Command '. $env:K_COMMON_FILE; $script:KRole="togo"; Set-StateScopes "drive,gmail"; Remove-Item Env:DAIMARU_ROLE -ErrorAction SilentlyContinue; if (-not (Select-Role) -or $script:KRole -ne "togo" -or (Test-Scopes (Get-StateScopes) "drive,gmail,calendar")) { exit 1 }'
+  out="$(APPDATA="$T/appdata" DAIMARU_DRY_RUN=1 DAIMARU_ROLE='' pwsh -NoProfile -File "$ROOT/setup.ps1" 2>&1)"
+  check 'PowerShell の再実行は保存済み役割を使用' contains "$out" '統合 の準備'
+  : > "$K_CALL_LOG"
+  APPDATA="$T/appdata" DAIMARU_ROLE=base DAIMARU_UPDATE=1 pwsh -NoProfile -File "$ROOT/setup.ps1" >"$T/ps-update.log" 2>&1
+  check 'PowerShell 更新時も gh setup-git' grep -qFx 'gh auth setup-git' "$K_CALL_LOG"
+  out="$(APPDATA="$T/appdata" OS=Windows_NT DAIMARU_DRY_RUN=1 K_SETUP_FILE="$ROOT/setup.ps1" pwsh -NoProfile -Command 'function Set-ExecutionPolicy { throw "blocked" }; iex ([IO.File]::ReadAllText($env:K_SETUP_FILE,[Text.Encoding]::UTF8)); Write-Output HOST_ALIVE' 2>&1)"
+  check 'PowerShell 実行ポリシー変更失敗後も setup が続く' bash -c '[[ "$1" == *HOST_ALIVE* && "$1" == *"予定: "* ]]' _ "$out"
+  out="$(APPDATA="$T/appdata" OS=Windows_NT DAIMARU_SETUP_ROOT="$ROOT" DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 K_DOCTOR_FILE="$ROOT/doctor/doctor.ps1" pwsh -NoProfile -Command 'function Set-ExecutionPolicy { throw "blocked" }; iex ([IO.File]::ReadAllText($env:K_DOCTOR_FILE,[Text.Encoding]::UTF8)); Write-Output HOST_ALIVE' 2>&1)"
+  check 'PowerShell 実行ポリシー変更失敗後も doctor が続く' bash -c '[[ "$1" == *HOST_ALIVE* && "$1" == *DAIMARU_DOCTOR:* ]]' _ "$out"
 fi
-for file in "$ROOT/setup.ps1" "$ROOT/lib/common.ps1" "$ROOT/doctor/doctor.ps1"; do
-  check "CRLF・BOMあり ${file#"$ROOT"/}" node -e 'const b=require("fs").readFileSync(process.argv[1]);process.exit(!b.subarray(0,3).equals(Buffer.from([239,187,191]))||!b.includes(Buffer.from("\r\n"))||b.toString().replace(/\r\n/g,"").includes("\n")?1:0)' "$file"
+for file in "$ROOT/setup.ps1" "$ROOT/doctor/doctor.ps1"; do
+  check "iex 用は BOM なし・CRLF ${file#"$ROOT"/}" node -e 'const b=require("fs").readFileSync(process.argv[1]);process.exit(b.subarray(0,3).equals(Buffer.from([239,187,191]))||!b.includes(Buffer.from("\r\n"))||b.toString().replace(/\r\n/g,"").includes("\n")?1:0)' "$file"
 done
+check 'dot-source 専用 common.ps1 は BOM あり・CRLF' node -e 'const b=require("fs").readFileSync(process.argv[1]);process.exit(!b.subarray(0,3).equals(Buffer.from([239,187,191]))||!b.includes(Buffer.from("\r\n"))?1:0)' "$ROOT/lib/common.ps1"
 printf 'kitting: %s pass / %s fail\n' "$pass_n" "$fail_n"
 [ "$fail_n" = 0 ]

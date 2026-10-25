@@ -48,11 +48,14 @@ for f in "$S"/*.js "$ROOT"/tests/*.js; do check "node --check ${f#"$ROOT"/}" nod
 for f in setup.ps1 sa-token.ps1; do
   check "scripts/op/$f は BOM なし（irm | iex 用）" bash -c "[ \"\$(head -c 3 '$ROOT/scripts/op/$f' | od -An -tx1 | tr -d ' ')\" != efbbbf ]"
 done
-# .gitattributes: Windows で clone しても .sh が LF のまま（i/lf と attr/text eol=lf）
-eol="$(git -C "$ROOT" ls-files --eol -- '*.sh' tests/stubs/op)"
-check ".gitattributes: *.sh と stub は i/lf・eol=lf" bash -c '[ -n "$1" ] && ! printf "%s\n" "$1" | grep -v "i/lf" | grep -q . && ! printf "%s\n" "$1" | grep -v "attr/text eol=lf" | grep -q .' _ "$eol"
-eol="$(git -C "$ROOT" ls-files --eol -- '*.ps1')"
-check ".gitattributes: *.ps1 は eol=crlf" bash -c '[ -n "$1" ] && ! printf "%s\n" "$1" | grep -v "attr/text eol=crlf" | grep -q .' _ "$eol"
+for f in "$ROOT/setup.ps1" "$ROOT/doctor/doctor.ps1"; do
+  check "${f#"$ROOT"/} は BOM なし（irm | iex 用）" bash -c '[ "$(head -c 3 "$1" | od -An -tx1 | tr -d " ")" != efbbbf ]' _ "$f"
+done
+check 'lib/common.ps1 は BOM あり（ディスクから dot-source）' bash -c '[ "$(head -c 3 "$1" | od -An -tx1 | tr -d " ")" = efbbbf ]' _ "$ROOT/lib/common.ps1"
+# .gitattributes と実ファイルを直接確認し、テスト中に Git を呼ばない。
+check '.gitattributes: sh と stub は eol=lf' bash -c 'grep -qxF "*.sh text eol=lf" "$1/.gitattributes" && grep -qxF "tests/stubs/op text eol=lf" "$1/.gitattributes"' _ "$ROOT"
+check '.gitattributes: ps1 は eol=crlf' grep -qxF '*.ps1 text eol=crlf' "$ROOT/.gitattributes"
+check '配布 sh と stub の実ファイルは LF' node -e 'const fs=require("fs");for(const p of process.argv.slice(1)){if(fs.readFileSync(p).includes(Buffer.from("\r")))process.exit(1)}' "$ROOT/setup.sh" "$ROOT/doctor/doctor.sh" "$ROOT/lib/common.sh" "$ROOT/tests/stubs/op"
 
 echo "== lib.sh"
 (
@@ -267,7 +270,10 @@ check "同じ名前が複数なら止めて一覧を出す" bash -c '[ "$1" = 2 
 check "同じ名前が複数なら create を呼ばない" bash -c "! grep -q 'item create' '$OP_STUB_LOG'"
 
 echo "== op-env-migrate.sh"
-PROJ="$T/repo"; mkdir -p "$PROJ/andpad-browser"; git -C "$PROJ" init -q
+PROJ="$T/repo"; mkdir -p "$PROJ/andpad-browser" "$PROJ/.git" "$T/git-bin"
+printf '#!/bin/sh\n[ "$1" = -C ] && [ "$3" = rev-parse ] && [ "$4" = --show-toplevel ] || exit 1\nprintf "%%s\\n" "$OP_TEST_REPO"\n' > "$T/git-bin/git"
+chmod +x "$T/git-bin/git"
+export OP_TEST_REPO="$PROJ" PATH="$T/git-bin:$PATH"
 printf 'node_modules\n' > "$PROJ/.gitignore"
 printf '# AndPad メモ: 旧パスワード=%s\nANDPAD_EMAIL=%s\nANDPAD_PASSWORD="%s"\n\nDRY_RUN=1\nSHEET_ID=abc123\nBYPASS_CACHE=1\nSLACK_WEBHOOK=https://hooks.example.com/%s\nDB_DSN=postgres://u:%s@db.example.com/x\nMIRROR=https://u:%s@mirror.example.com/\n' \
   "$FAKE_SECRET" "$FAKE_USER" "$FAKE_SECRET" "$FAKE_SECRET" "$FAKE_SECRET" "$FAKE_SECRET" > "$PROJ/andpad-browser/.env"
