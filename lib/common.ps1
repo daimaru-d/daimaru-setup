@@ -111,7 +111,7 @@ function Install-NpmCi([string]$Repo) {
 }
 function Run-Step([string]$Name,[scriptblock]$Check,[scriptblock]$Action) {
   if (Is-DryRun) { Say "予定: $Name"; return }
-  if ((Is-Update) -and $Name -ne 'hub-update' -and $Name -ne 'skills') { return }
+  if ((Is-Update) -and $Name -ne 'hub-update' -and $Name -ne 'npm-ci' -and $Name -ne 'skills') { return }
   $result = 'fail'
   try {
     $r=@(& $Check)
@@ -151,14 +151,12 @@ function Invoke-Gws([string[]]$GwsArgs) {
 function Test-OpReady {
   if (-not (Have-Cli 'op')) { return $false }
   $doctor=Join-Path $HOME '.claude\skills\op-secrets\scripts\op-doctor.sh'
+  if (-not (Test-Path $doctor)) { return $false }
   $bash=Get-GitBash
   if (-not $bash) { $bashCmd=Get-Command bash -ErrorAction SilentlyContinue | Select-Object -First 1; if ($bashCmd) { $bash=$bashCmd.Source } }
-  if ((Test-Path $doctor) -and $bash) {
-    $out=@(& $bash ($doctor -replace '\\','/') 2>$null)
-    return ($LASTEXITCODE -eq 0 -and $out.Count -gt 0 -and $out[-1] -eq 'OP_DOCTOR: PASS')
-  }
-  Invoke-Cli op @('whoami') 2>$null | Out-Null
-  return ($LASTEXITCODE -eq 0)
+  if (-not $bash) { return $false }
+  $out=@(& $bash ($doctor -replace '\\','/') 2>$null)
+  return ($LASTEXITCODE -eq 0 -and $out.Count -gt 0 -and $out[-1] -eq 'OP_DOCTOR: PASS')
 }
 function Get-GitBash {
   $git=Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -239,6 +237,21 @@ function Clear-GwsTemps {
   $dir=if ($env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR) { $env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR } else { Join-Path $HOME '.config\gws' }
   if (Test-Path $dir) { Get-ChildItem $dir -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '.client_secret-*' -or $_.Name -eq '.op-error.tmp' } | Remove-Item -Force -ErrorAction SilentlyContinue }
 }
+function Allow-WorkspaceRepos([string]$Workspace,[string]$Hub) {
+  $path=Join-Path $Workspace '.claude\settings.local.json'
+  $repos=(Join-Path $Hub 'repos').Replace('\','/')
+  try {
+    if (Test-Path $path) { $settings=Get-Content $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+    else { $settings=[pscustomobject]@{} }
+  } catch { Warn 'settings.local.json の JSON が壊れているため変更しません'; return $true }
+  if ($null -eq $settings -or $settings -isnot [pscustomobject]) { Warn 'settings.local.json の形式が正しくないため変更しません'; return $true }
+  if ($null -eq $settings.permissions -or $settings.permissions -isnot [pscustomobject]) { $settings | Add-Member -NotePropertyName permissions -NotePropertyValue ([pscustomobject]@{}) -Force }
+  $dirs=@($settings.permissions.additionalDirectories | Where-Object { $null -ne $_ })
+  if ($dirs -contains $repos) { return $true }
+  $settings.permissions | Add-Member -NotePropertyName additionalDirectories -NotePropertyValue @($dirs + $repos) -Force
+  try { [IO.File]::WriteAllText($path,(ConvertTo-Json -InputObject $settings -Depth 20) + "`n",(New-Object Text.UTF8Encoding($false))); return $true }
+  catch { return $false }
+}
 function Copy-RoleSkills([string]$Hub,[string]$Role) {
   $file = Join-Path $Hub "profiles\$Role.json"
   if (-not (Test-Path $file)) { return $true }
@@ -259,6 +272,7 @@ function Copy-RoleSkills([string]$Hub,[string]$Role) {
     foreach ($item in Get-ChildItem (Join-Path $Hub '.claude') -Force) {
       if ($item.Name -eq 'skills') { continue }
       $target=Join-Path $config $item.Name
+      if ($item.Name -eq 'settings.local.json' -and (Test-Path $target)) { continue }
       if (Test-Path $target) { Remove-Item $target -Recurse -Force -ErrorAction Stop }
       Copy-Item -Path $item.FullName -Destination $target -Recurse -Force -ErrorAction Stop
     }
@@ -279,6 +293,7 @@ function Copy-RoleSkills([string]$Hub,[string]$Role) {
       }
       try { New-Item -ItemType Junction -Path $link -Target $repos -ErrorAction Stop | Out-Null; if (-not (Test-Path $link)) { throw 'junction unavailable' } }
       catch { Copy-Item $repos $link -Recurse -Force -ErrorAction Stop }
+      if (-not (Allow-WorkspaceRepos $workspace $Hub)) { return $false }
     }
     New-Item -ItemType File -Path $ready -Force | Out-Null
     return $true

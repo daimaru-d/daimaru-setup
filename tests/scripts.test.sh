@@ -51,7 +51,7 @@ done
 for f in "$ROOT/setup.ps1" "$ROOT/doctor/doctor.ps1"; do
   check "${f#"$ROOT"/} は BOM なし（irm | iex 用）" bash -c '[ "$(head -c 3 "$1" | od -An -tx1 | tr -d " ")" != efbbbf ]' _ "$f"
 done
-check 'lib/common.ps1 は BOM あり（ディスクから dot-source）' bash -c '[ "$(head -c 3 "$1" | od -An -tx1 | tr -d " ")" = efbbbf ]' _ "$ROOT/lib/common.ps1"
+check 'lib/common.ps1 は BOM あり' bash -c '[ "$(head -c 3 "$1" | od -An -tx1 | tr -d " ")" = efbbbf ]' _ "$ROOT/lib/common.ps1"
 # .gitattributes と実ファイルを直接確認し、テスト中に Git を呼ばない。
 check '.gitattributes: sh と stub は eol=lf' bash -c 'grep -qxF "*.sh text eol=lf" "$1/.gitattributes" && grep -qxF "tests/stubs/op text eol=lf" "$1/.gitattributes"' _ "$ROOT"
 check '.gitattributes: ps1 は eol=crlf' grep -qxF '*.ps1 text eol=crlf' "$ROOT/.gitattributes"

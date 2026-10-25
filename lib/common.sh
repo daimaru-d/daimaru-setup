@@ -177,7 +177,7 @@ NODE
 run_step(){ # name, check-function, action-function
   local name="$1" check_fn="$2" action_fn="$3" result
   if dry_run; then say "予定: $name"; return 0; fi
-  if update_only && [ "$name" != hub-update ] && [ "$name" != skills ]; then return 0; fi
+  if update_only && [ "$name" != hub-update ] && [ "$name" != npm-ci ] && [ "$name" != skills ]; then return 0; fi
   if "$check_fn"; then result=skip; ok "$name は済み";
   elif "$action_fn"; then result=ok; ok "$name 完了";
   else result=fail; warn "$name を完了できませんでした"; fi
@@ -185,6 +185,22 @@ run_step(){ # name, check-function, action-function
   [ "$result" != fail ]
 }
 valid_skill(){ case "$1" in ''|*[!a-zA-Z0-9-]*) return 1;; esac; return 0; }
+allow_workspace_repos(){
+  local settings="$1/.claude/settings.local.json" repos="$2/repos"
+  K_ALLOWED_REPOS="$repos" node - "$settings" <<'NODE'
+const fs=require('fs'),p=process.argv[2],repos=process.env.K_ALLOWED_REPOS.replace(/\\/g,'/');
+let s={};
+if(fs.existsSync(p)){
+  try{s=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){console.error('settings.local.json の JSON が壊れているため変更しません');process.exit(0)}
+  if(!s||typeof s!=='object'||Array.isArray(s)){console.error('settings.local.json の形式が正しくないため変更しません');process.exit(0)}
+}
+if(!s.permissions||typeof s.permissions!=='object'||Array.isArray(s.permissions))s.permissions={};
+const dirs=Array.isArray(s.permissions.additionalDirectories)?s.permissions.additionalDirectories:[];
+if(dirs.includes(repos))process.exit(0);
+s.permissions.additionalDirectories=[...dirs,repos];
+const tmp=p+'.tmp';fs.writeFileSync(tmp,JSON.stringify(s,null,2)+'\n',{mode:0o600});fs.renameSync(tmp,p);
+NODE
+}
 copy_skills(){
   local hub="$1" role="$2" list name workspace item
   [ -d "$hub/.claude/skills" ] || return 1
@@ -200,6 +216,7 @@ copy_skills(){
   for item in "$hub/.claude/"*; do
     [ -e "$item" ] || continue
     [ "${item##*/}" = skills ] && continue
+    [ "${item##*/}" = settings.local.json ] && [ -f "$workspace/.claude/settings.local.json" ] && continue
     rm -rf "$workspace/.claude/${item##*/}" || return 1
     cp -R "$item" "$workspace/.claude/${item##*/}" || return 1
   done
@@ -216,6 +233,7 @@ EOF
     if [ -L "$workspace/repos" ]; then rm "$workspace/repos" || return 1
     else rm -rf "$workspace/repos" || return 1; fi
     ln -s "$hub/repos" "$workspace/repos" || return 1
+    allow_workspace_repos "$workspace" "$hub" || return 1
   fi
   : > "$workspace/.ready"
 }

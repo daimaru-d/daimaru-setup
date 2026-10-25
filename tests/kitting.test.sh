@@ -72,6 +72,15 @@ printf 'hub instructions\n' > "$T/hub/CLAUDE.md"
 printf 'repo content\n' > "$T/hub/repos/demo/readme"
 check '役割ワークスペースには指定スキルと設定だけ' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && [ -f "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/alpha/SKILL.md" ] && [ ! -e "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/beta" ] && [ -f "$HOME/.config/daimaru-setup/workspaces/base/.claude/settings.json" ] && [ "$(role_workspace "$2" base)" = "$HOME/.config/daimaru-setup/workspaces/base" ]' _ "$ROOT" "$T/hub"
 check 'hub の文書と repos をワークスペースから参照' bash -c '. "$1/lib/common.sh"; [ -f "$HOME/.config/daimaru-setup/workspaces/base/CLAUDE.md" ] && [ -f "$HOME/.config/daimaru-setup/workspaces/base/repos/demo/readme" ] && [ ! -L "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/alpha" ] && [ ! -e "$2/.git/info/exclude" ]' _ "$ROOT" "$T/hub"
+sh_settings="$HOME/.config/daimaru-setup/workspaces/base/.claude/settings.local.json"
+check 'sh は repos の Read/Edit 許可を作る' node -e 'let s=require(process.argv[1]);process.exit(s.permissions.additionalDirectories.includes(process.argv[2].replace(/\\/g,"/"))?0:1)' "$sh_settings" "$T/hub/repos"
+printf '{"model":"keep","permissions":{"allow":["Read"]}}\n' > "$sh_settings"
+check 'sh は settings.local.json の既存キーを保つ' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && node -e '\''let s=require(process.argv[1]);process.exit(s.model==="keep"&&s.permissions.allow[0]==="Read"&&s.permissions.additionalDirectories.length===1&&s.permissions.additionalDirectories[0]===process.argv[2].replace(/\\/g,"/")?0:1)'\'' "$3" "$2/repos"' _ "$ROOT" "$T/hub" "$sh_settings"
+sh_settings_before="$(cat "$sh_settings")"
+check 'sh は再生成しても settings.local.json が不変' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && [ "$(cat "$3")" = "$4" ]' _ "$ROOT" "$T/hub" "$sh_settings" "$sh_settings_before"
+printf '{broken' > "$sh_settings"
+check 'sh は壊れた settings.local.json を上書きしない' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && [ "$(cat "$3")" = "{broken" ]' _ "$ROOT" "$T/hub" "$sh_settings"
+rm -f "$sh_settings"
 check 'ワークスペースの親に hub のスキルがない' bash -c 'w="$HOME/.config/daimaru-setup/workspaces/base"; p="$(dirname "$w")"; while [ "$p" != / ]; do [ ! -d "$p/.claude/skills" ] || exit 1; [ "$p" != "$1" ] || exit 2; p="$(dirname "$p")"; done' _ "$T/hub"
 check 'repos リンクを2回更新しても hub の中身を保つ' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && copy_skills "$2" base && [ -L "$HOME/.config/daimaru-setup/workspaces/base/repos" ] && [ -f "$2/repos/demo/readme" ]' _ "$ROOT" "$T/hub"
 check 'スキル更新で二重ネストしない' bash -c '. "$1/lib/common.sh"; copy_skills "$2" base && [ -f "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/alpha/SKILL.md" ] && [ ! -e "$HOME/.config/daimaru-setup/workspaces/base/.claude/skills/alpha/alpha" ]' _ "$ROOT" "$T/hub"
@@ -133,9 +142,17 @@ DAIMARU_ROLE=yochi DAIMARU_DOCTOR_SKIP_NETWORK=1 bash "$ROOT/setup.sh" >"$T/yoch
 check '追加スコープが必要なら gws に再ログイン' grep -qFx 'gws auth login -s gmail,drive' "$K_CALL_LOG"
 check 'gws 認可成功後にスコープを state へ保存' bash -c '. "$1/lib/common.sh"; scopes_cover "$(state_scopes)" gmail,drive' _ "$ROOT"
 : > "$K_CALL_LOG"
+printf ' ' >> "$HOME/daimaru-skills/repos/eigyo-talk-analyzer/package-lock.json"
 DAIMARU_UPDATE=1 bash "$ROOT/setup.sh" >"$T/update-run.log" 2>&1
 check 'DAIMARU_UPDATE の役割は保存済みの役割' grep -q '用地 の準備' "$T/update-run.log"
 check '更新だけの再実行でも gh setup-git' grep -qFx 'gh auth setup-git' "$K_CALL_LOG"
+check 'sh 更新モードでも npm ci を実行' grep -qFx 'npm ci' "$K_CALL_LOG"
+: > "$K_CALL_LOG"
+DAIMARU_UPDATE=1 bash "$ROOT/setup.sh" >"$T/update-second.log" 2>&1
+check 'sh 更新モードで lock 不変なら npm ci を省略' bash -c '! grep -qFx "npm ci" "$1"' _ "$K_CALL_LOG"
+printf ' ' >> "$HOME/daimaru-skills/repos/eigyo-talk-analyzer/package-lock.json"
+DAIMARU_UPDATE=1 bash "$ROOT/setup.sh" >"$T/update-third.log" 2>&1
+check 'sh 更新モードで lock 変更なら npm ci を再実行' grep -qFx 'npm ci' "$K_CALL_LOG"
 mkdir -p "$HOME/Downloads"
 printf 'FAKE_SECRET_MUST_NOT_PRINT' > "$HOME/Downloads/client_secret-test.json"
 out="$(DAIMARU_ROLE=base DAIMARU_DOCTOR_SKIP_NETWORK=1 bash "$ROOT/doctor/doctor.sh" 2>&1)"; rc=$?
@@ -180,6 +197,13 @@ if command -v pwsh >/dev/null 2>&1; then
   while IFS= read -r file; do
     check "PowerShell parse ${file#"$ROOT"/}" env K_PARSE_FILE="$file" pwsh -NoProfile -Command '$e=$null; [System.Management.Automation.Language.Parser]::ParseFile($env:K_PARSE_FILE,[ref]$null,[ref]$e) | Out-Null; if ($e.Count) { $e | Out-String | Write-Host; exit 1 }'
   done < <(find "$ROOT" -path "$ROOT/.cross-review-tmp" -prune -o -name '*.ps1' -type f -print)
+  check 'ps1 にファイルの dot-source が残らない' env K_SOURCE_ROOT="$ROOT" pwsh -NoProfile -Command '
+    foreach ($f in Get-ChildItem $env:K_SOURCE_ROOT -Filter *.ps1 -Recurse | Where-Object { $_.FullName -notlike "*/scripts/keiri/*" -and $_.FullName -notlike "*/.cross-review-tmp/*" }) {
+      $s=[IO.File]::ReadAllText($f.FullName,[Text.Encoding]::UTF8)
+      if ($s -match "(?m)^\s*\.\s+(?!\(\[scriptblock\]::Create\()") { Write-Host $f.FullName; exit 1 }
+    }
+  '
+  check 'UTF8 読み込み後に common の関数を呼べる' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" pwsh -NoProfile -Command '. ([scriptblock]::Create([IO.File]::ReadAllText($env:K_COMMON_FILE,[Text.Encoding]::UTF8))); if (-not (Get-Command Copy-RoleSkills -ErrorAction SilentlyContinue) -or -not (Valid-Role base)) { exit 1 }'
   check 'PS5.1 の CP932 と UTF8 専用経路を全 ps1 で判定' env K_SOURCE_ROOT="$ROOT" pwsh -NoProfile -Command '
     $utfOnly=@("setup.ps1","doctor/doctor.ps1","scripts/op/setup.ps1","scripts/op/sa-token.ps1","scripts/keiri/onboard.ps1")
     $cp=[Text.Encoding]::GetEncoding(932)
@@ -217,12 +241,29 @@ if command -v pwsh >/dev/null 2>&1; then
   '
   check 'PowerShell スキル更新は二重ネストしない' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_TEST_HUB="$T/hub" pwsh -NoProfile -Command '$ErrorActionPreference="Stop"; . $env:K_COMMON_FILE; if (-not (Copy-RoleSkills $env:K_TEST_HUB base)) { exit 1 }; $w=Get-RoleWorkspace $env:K_TEST_HUB base; if (-not (Test-Path (Join-Path $w ".claude/skills/alpha/SKILL.md")) -or (Test-Path (Join-Path $w ".claude/skills/alpha/alpha")) -or (Test-Path (Join-Path $w ".claude/skills/beta"))) { exit 1 }'
   check 'PowerShell repos のリンクだけを2回削除' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_TEST_HUB="$T/hub" pwsh -NoProfile -Command '$ErrorActionPreference="Stop"; . $env:K_COMMON_FILE; if (-not (Copy-RoleSkills $env:K_TEST_HUB base) -or -not (Copy-RoleSkills $env:K_TEST_HUB base) -or -not (Test-Path (Join-Path $env:K_TEST_HUB "repos/demo/readme"))) { exit 1 }'
+  check 'PowerShell は settings.local.json に repos を追加し既存キーを保持' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_TEST_HUB="$T/hub" pwsh -NoProfile -Command '
+    . $env:K_COMMON_FILE
+    $w=Get-RoleWorkspace $env:K_TEST_HUB base; $p=Join-Path $w ".claude/settings.local.json"; $repos=(Join-Path $env:K_TEST_HUB "repos").Replace("\","/")
+    if (-not (Test-Path $p) -or ((Get-Content $p -Raw | ConvertFrom-Json).permissions.additionalDirectories -notcontains $repos)) { exit 1 }
+    [IO.File]::WriteAllText($p,"{" + "`"model`":`"keep`",`"permissions`":{`"allow`":[`"Read`"]}}")
+    if (-not (Copy-RoleSkills $env:K_TEST_HUB base)) { exit 2 }
+    $s=Get-Content $p -Raw | ConvertFrom-Json
+    if ($s.model -ne "keep" -or $s.permissions.allow[0] -ne "Read" -or @($s.permissions.additionalDirectories).Count -ne 1 -or $s.permissions.additionalDirectories[0] -ne $repos) { exit 3 }
+    $before=[IO.File]::ReadAllText($p)
+    if (-not (Copy-RoleSkills $env:K_TEST_HUB base) -or [IO.File]::ReadAllText($p) -cne $before) { exit 4 }
+    [IO.File]::WriteAllText($p,"{broken")
+    if (-not (Copy-RoleSkills $env:K_TEST_HUB base) -or [IO.File]::ReadAllText($p) -ne "{broken") { exit 5 }
+    Remove-Item $p
+  '
   check 'PowerShell ワークスペースの親に hub のスキルがない' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_TEST_HUB="$T/hub" pwsh -NoProfile -Command '. $env:K_COMMON_FILE; $w=Get-RoleWorkspace $env:K_TEST_HUB base; for ($p=[IO.Directory]::GetParent($w); $p; $p=$p.Parent) { if ((Test-Path (Join-Path $p.FullName ".claude/skills")) -or $p.FullName -eq $env:K_TEST_HUB) { exit 1 } }'
   check 'PowerShell ワークスペースで hub 文書と repos が見える' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" K_TEST_HUB="$T/hub" pwsh -NoProfile -Command '. $env:K_COMMON_FILE; $w=Get-RoleWorkspace $env:K_TEST_HUB base; if (-not (Test-Path (Join-Path $w "CLAUDE.md")) -or -not (Test-Path (Join-Path $w "repos/demo/readme")) -or (Test-Path (Join-Path $env:K_TEST_HUB ".git/info/exclude"))) { exit 1 }'
   printf '#!/bin/sh\necho EXE_OK\n' > "$T/bin/claude.exe"; chmod +x "$T/bin/claude.exe"
   check 'PowerShell は claude.exe を検出・起動' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" pwsh -NoProfile -Command '. $env:K_COMMON_FILE; if (-not (Have-Cli claude) -or (Invoke-Cli claude @()) -ne "EXE_OK") { exit 1 }'
   rm -f "$T/bin/claude.exe"
   check 'PowerShell op-doctor PASS を確認' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" pwsh -NoProfile -Command '. $env:K_COMMON_FILE; if (-not (Test-OpReady)) { exit 1 }'
+  mv "$HOME/.claude/skills/op-secrets/scripts/op-doctor.sh" "$T/op-doctor.saved"
+  check 'PowerShell は op whoami が通っても doctor 不在なら未準備' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" pwsh -NoProfile -Command '. $env:K_COMMON_FILE; if (Test-OpReady) { exit 1 }'
+  mv "$T/op-doctor.saved" "$HOME/.claude/skills/op-secrets/scripts/op-doctor.sh"
   printf '#!/bin/sh\necho "OP_DOCTOR: FAIL missing=2"\n' > "$HOME/.claude/skills/op-secrets/scripts/op-doctor.sh"
   check 'PowerShell op-doctor FAIL は導入済みとしない' env APPDATA="$T/appdata" K_COMMON_FILE="$ROOT/lib/common.ps1" pwsh -NoProfile -Command '. $env:K_COMMON_FILE; if (Test-OpReady) { exit 1 }'
   printf '#!/bin/sh\necho "OP_DOCTOR: PASS"\n' > "$HOME/.claude/skills/op-secrets/scripts/op-doctor.sh"
@@ -269,6 +310,13 @@ if command -v pwsh >/dev/null 2>&1; then
   APPDATA="$T/appdata" DAIMARU_ROLE=base DAIMARU_UPDATE=1 pwsh -NoProfile -File "$ROOT/setup.ps1" >"$T/ps-update.log" 2>&1
   check 'PowerShell 更新時も gh setup-git' grep -qFx 'gh auth setup-git' "$K_CALL_LOG"
   check 'PowerShell hub-update で submodule を初期化' grep -qFx 'git submodule update --init --recursive' "$K_CALL_LOG"
+  check 'PowerShell 更新モードでも npm ci を実行' grep -qFx 'npm ci' "$K_CALL_LOG"
+  : > "$K_CALL_LOG"
+  APPDATA="$T/appdata" DAIMARU_ROLE=base DAIMARU_UPDATE=1 pwsh -NoProfile -File "$ROOT/setup.ps1" >"$T/ps-update-second.log" 2>&1
+  check 'PowerShell 更新モードで lock 不変なら npm ci を省略' bash -c '! grep -qFx "npm ci" "$1"' _ "$K_CALL_LOG"
+  printf ' ' >> "$HOME/daimaru-skills/repos/eigyo-talk-analyzer/package-lock.json"
+  APPDATA="$T/appdata" DAIMARU_ROLE=base DAIMARU_UPDATE=1 pwsh -NoProfile -File "$ROOT/setup.ps1" >"$T/ps-update-third.log" 2>&1
+  check 'PowerShell 更新モードで lock 変更なら npm ci を再実行' grep -qFx 'npm ci' "$K_CALL_LOG"
   : > "$K_CALL_LOG"
   APPDATA="$T/appdata" K_SUBMODULE_FAIL=1 DAIMARU_ROLE=base DAIMARU_UPDATE=1 pwsh -NoProfile -File "$ROOT/setup.ps1" >"$T/ps-submodule-fail.log" 2>&1
   check 'PowerShell submodule 失敗時に clone しない' bash -c 'grep -qFx "git submodule update --init --recursive" "$1" && ! grep -q "git clone" "$1"' _ "$K_CALL_LOG"
@@ -280,7 +328,7 @@ fi
 for file in "$ROOT/setup.ps1" "$ROOT/doctor/doctor.ps1"; do
   check "iex 用は BOM なし・CRLF ${file#"$ROOT"/}" node -e 'const b=require("fs").readFileSync(process.argv[1]);process.exit(b.subarray(0,3).equals(Buffer.from([239,187,191]))||!b.includes(Buffer.from("\r\n"))||b.toString().replace(/\r\n/g,"").includes("\n")?1:0)' "$file"
 done
-check 'dot-source 専用 common.ps1 は BOM あり・CRLF' node -e 'const b=require("fs").readFileSync(process.argv[1]);process.exit(!b.subarray(0,3).equals(Buffer.from([239,187,191]))||!b.includes(Buffer.from("\r\n"))?1:0)' "$ROOT/lib/common.ps1"
+check 'common.ps1 は BOM あり・CRLF' node -e 'const b=require("fs").readFileSync(process.argv[1]);process.exit(!b.subarray(0,3).equals(Buffer.from([239,187,191]))||!b.includes(Buffer.from("\r\n"))?1:0)' "$ROOT/lib/common.ps1"
 cat > "$T/bin/curl" <<'STUB'
 #!/bin/sh
 url=''; out=''

@@ -14,7 +14,7 @@ if (-not $script:DoctorRoot -or -not (Test-Path (Join-Path $script:DoctorRoot 'l
   New-Item -ItemType Directory -Force -Path (Join-Path $script:DoctorRoot 'lib'),(Join-Path $script:DoctorRoot 'profiles') | Out-Null
   try { Invoke-WebRequest "$script:DoctorBase/lib/common.ps1" -OutFile (Join-Path $script:DoctorRoot 'lib\common.ps1') -UseBasicParsing -ErrorAction Stop } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=common'; if ($PSCommandPath) { exit 2 } else { return } }
 }
-try { . (Join-Path $script:DoctorRoot 'lib\common.ps1') } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=common'; if ($PSCommandPath) { exit 2 } else { return } }
+try { . ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $script:DoctorRoot 'lib\common.ps1'),[Text.Encoding]::UTF8))) } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=common'; if ($PSCommandPath) { exit 2 } else { return } }
 $script:DoctorRole = $env:DAIMARU_ROLE
 if (-not $script:DoctorRole) { $script:DoctorRole=Get-StateRole }
 if (-not $script:DoctorRole) { $script:DoctorRole='base' }
@@ -56,7 +56,7 @@ else {
   }
 }
 if (Needs 'gws') {
-  if (-not (Test-Scopes (Get-StateScopes) $script:KProfile.GWS_SCOPES)) { Doctor-Fail 'gws-scopes' 'gws: この役割の認可スコープが記録されていません' "DAIMARU_ROLE=$script:DoctorRole を指定して setup.ps1 を再実行してください" }
+  if (-not (Test-Scopes (Get-StateScopes) $script:KProfile.GWS_SCOPES)) { Doctor-Fail 'gws-scopes' 'gws: この役割の認可スコープが記録されていません' "`$env:DAIMARU_ROLE='$script:DoctorRole'; irm $script:DoctorBase/setup.ps1 | iex" }
   if ($env:DAIMARU_DOCTOR_SKIP_NETWORK -eq '1') { Doctor-Skip 'gws 実 API' }
   elseif (Have gws.cmd) {
     $errFile=Join-Path ([IO.Path]::GetTempPath()) ('gws-doctor-' + [guid]::NewGuid().ToString('N'))

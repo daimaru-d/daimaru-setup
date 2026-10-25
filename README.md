@@ -23,7 +23,7 @@
 
 例: macOS / Linux は `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh | DAIMARU_ROLE=sekkei bash`、Windows は `$env:DAIMARU_ROLE='sekkei'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 | iex` を実行します。役割を指定しなければ対話端末から選べます。
 
-役割の選択は次回以降も保存されます。役割プロファイルがある場合、Claude は `~/.config/daimaru-setup/workspaces/<役割>`（Windows は `%APPDATA%\daimaru-setup\workspaces\<役割>`）から起動します。この作業ディレクトリの `.claude/skills` には選んだ役割のスキルだけを配置し、hub 本体は変更しません。
+役割の選択は次回以降も保存されます。役割プロファイルがある場合、Claude は `~/.config/daimaru-setup/workspaces/<役割>`（Windows は `%APPDATA%\daimaru-setup\workspaces\<役割>`）から起動します。この作業ディレクトリの `.claude/skills` には選んだ役割のスキルだけを配置し、hub 本体は変更しません。ワークスペースからは業務リポジトリのスキルも参照できます。
 
 ## うまくいっているか確かめる
 
@@ -47,7 +47,7 @@ doctor という診断を実行すると、できていない所とその直し�
 - **Windows「スクリプトの実行が無効（running scripts is disabled / PSSecurityException）」**
   → このスクリプトは `.cmd` 版を直接呼ぶよう対策済みです。**もう一度この1行を実行**してください（入ったソフトは自動スキップ）。
   組織ポリシーで制限された PC では、**次回からの起動は `claude` ではなく `claude.cmd`** と打ってください。
-- **詰まったら**: Claude 起動後に `bash .claude/skills/bi-dashboard/harness/bi-doctor.sh` を実行すると、不足が OS別の直し方付きで一覧表示されます。
+- **詰まったら**: `bi-dashboard` がある役割では、Claude 起動後に `bash .claude/skills/bi-dashboard/harness/bi-doctor.sh` を実行すると、不足が OS別の直し方付きで一覧表示されます。
 
 ## 安全性について
 

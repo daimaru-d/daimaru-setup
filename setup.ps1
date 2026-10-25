@@ -28,7 +28,7 @@ elseif ($env:DAIMARU_DRY_RUN -eq '1') {
   try { Invoke-WebRequest "$script:KBase/lib/common.ps1" -OutFile (Join-Path $script:KTemp 'lib\common.ps1') -UseBasicParsing -ErrorAction Stop } catch { Write-Host '共通部品を取得できません'; return }
   $script:KRoot=$script:KTemp
 }
-try { . (Join-Path $script:KRoot 'lib\common.ps1') } catch { Write-Host '共通部品を読み込めません。セットアップを中止します'; return }
+try { . ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $script:KRoot 'lib\common.ps1'),[Text.Encoding]::UTF8))) } catch { Write-Host '共通部品を読み込めません。セットアップを中止します'; return }
 if (-not (Get-Command Select-Role -ErrorAction SilentlyContinue)) { Write-Host '共通部品を読み込めません。セットアップを中止します'; return }
 if (-not (Select-Role)) { return }
 $profileFile=Join-Path $script:KRoot "profiles\$script:KRole.env"
