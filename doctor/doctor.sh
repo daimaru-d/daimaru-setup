@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 set -uo pipefail
+export PATH="$HOME/.local/bin:$HOME/google-cloud-sdk/bin:$PATH"
 D_SOURCE="${BASH_SOURCE[0]:-}"
 if [ -n "$D_SOURCE" ]; then
   D_HERE="$(cd "$(dirname "$D_SOURCE")/.." 2>/dev/null && pwd || pwd)"
@@ -70,18 +71,19 @@ if have claude; then
   if claude auth status >/dev/null 2>&1; then pass_item 'Claude: ログイン済み'
   else warn 'Claude: ログイン状態を確認できません'; hint 'claude を起動してログインしてください'; fi
 fi
+if [ ! -d "$HOME/daimaru-skills/.git" ]; then fail_item hub 'daimaru-skills が見つかりません' 'セットアップをもう一度実行'; fi
 if network_skip; then skip_item 'GitHub 権限'; skip_item 'daimaru-skills 更新';
 else
   if have gh && gh auth status >/dev/null 2>&1 && gh api repos/daimaru-d/daimaru-skills >/dev/null 2>&1; then pass_item 'GitHub: daimaru-d read'
   else fail_item gh-access 'GitHub: daimaru-d の read 権限を確認できません' 'gh auth login または管理者に daimaru-d read 権限を依頼'; fi
   if [ -d "$HOME/daimaru-skills/.git" ] && have git; then
     if (cd "$HOME/daimaru-skills" && git fetch -q origin && [ "$(git rev-list --count 'HEAD..@{u}' 2>/dev/null)" = 0 ]); then pass_item 'daimaru-skills: 最新'
-    else fail_item hub-update 'daimaru-skills: 更新が必要か確認できません' 'cd ~/daimaru-skills && git pull'; fi
-  else fail_item hub 'daimaru-skills が見つかりません' 'セットアップをもう一度実行'; fi
+    else warn 'daimaru-skills: 更新が必要か確認できません'; hint 'セットアップをもう一度実行'; fi
+  fi
 fi
 if needs gws; then
   if ! scopes_cover "$(state_scopes)" "$GWS_SCOPES"; then
-    fail_item gws-scopes 'gws: この役割の認可スコープが記録されていません' "gws auth login -s $GWS_SCOPES を実行"
+    fail_item gws-scopes 'gws: この役割の認可スコープが記録されていません' "DAIMARU_ROLE=$K_ROLE を指定して setup.sh を再実行"
   fi
   if network_skip; then skip_item 'gws 実 API'
   elif have gws; then

@@ -143,7 +143,12 @@ run_step node check_node install_node || true
 run_step gh check_gh install_gh || true
 run_step gh-access check_gh_auth login_gh || true
 if ! dry_run && have gh; then gh auth setup-git >/dev/null 2>&1 || true; fi
+K_HUB_EXISTED=0
+[ -d "$K_HUB/.git" ] && K_HUB_EXISTED=1
 run_step hub check_hub clone_hub || true
+if ! dry_run && ! update_only && [ "$K_HUB_EXISTED" = 1 ]; then
+  (cd "$K_HUB" && git pull --ff-only >/dev/null 2>&1 && { [ ! -f .gitmodules ] || git submodule update --init --recursive >/dev/null 2>&1; }) || warn 'daimaru-skills を更新できませんでした。現在の内容で続行します'
+fi
 if update_only; then run_step hub-update check_never update_hub || true; fi
 run_step npm-ci check_npm_ci install_npm_ci || true
 if needs op; then run_step op check_op install_op || true; fi
@@ -178,6 +183,7 @@ else warn 'doctor を取得できませんでした'; fi
 if [ -d "$K_HUB/.git" ] && have claude; then
   cleanup_gws_temps
   cd "$(role_workspace "$K_HUB" "$K_ROLE")" || exit 0
+  if [ -n "$K_TMP" ]; then rm -rf "$K_TMP"; K_TMP=''; fi
   exec claude --permission-mode acceptEdits
 fi
 warn 'Claude または道具箱が未導入です。doctor の案内を確認してください'

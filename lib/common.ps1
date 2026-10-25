@@ -78,7 +78,7 @@ function Load-Profile([string]$Path) {
 }
 function Needs([string]$Name) { return @(($script:KProfile.TOOLS -split ' ') | Where-Object { $_ -eq $Name }).Count -gt 0 }
 function Get-StateStep([string]$Name) {
-  try { $s = Get-Content $script:KState -Raw | ConvertFrom-Json; if ($s.role -eq $script:KRole) { return $s.steps.$Name } } catch { }
+  try { if (-not (Test-Path $script:KState)) { return $null }; $s = Get-Content $script:KState -Raw -ErrorAction Stop | ConvertFrom-Json; if ($s.role -eq $script:KRole) { return $s.steps.$Name } } catch { }
   return $null
 }
 function Set-StateStep([string]$Name,[string]$Result) {
@@ -86,7 +86,7 @@ function Set-StateStep([string]$Name,[string]$Result) {
   $dir = Split-Path $script:KState -Parent
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
   $s = $null
-  try { $s = Get-Content $script:KState -Raw | ConvertFrom-Json } catch { }
+  try { if (Test-Path $script:KState) { $s = Get-Content $script:KState -Raw -ErrorAction Stop | ConvertFrom-Json } } catch { }
   if (-not $s) { $s = [pscustomobject]@{role=$script:KRole;steps=[pscustomobject]@{};lastRun=''} }
   elseif ($s.role -ne $script:KRole) { $s.role=$script:KRole; $s.steps=[pscustomobject]@{} }
   $s.steps | Add-Member -NotePropertyName $Name -NotePropertyValue $Result -Force
@@ -99,14 +99,23 @@ function Run-Step([string]$Name,[scriptblock]$Check,[scriptblock]$Action) {
   if ((Is-Update) -and $Name -ne 'hub-update' -and $Name -ne 'skills') { return }
   $result = 'fail'
   try {
-    if (& $Check) { $result='skip'; Ok "$Name は済み" }
-    elseif (& $Action) { $result='ok'; Ok "$Name 完了" }
-    else { Warn "$Name を完了できませんでした" }
+    $r=@(& $Check)
+    $checked=($r.Count -gt 0 -and $r[-1] -eq $true)
+    if ($checked) { $result='skip'; Ok "$Name は済み" }
+    else {
+      $r=@(& $Action)
+      $ok=($r.Count -gt 0 -and $r[-1] -eq $true)
+      if ($ok) { $result='ok'; Ok "$Name 完了" }
+      else { Warn "$Name を完了できませんでした" }
+    }
   } catch { Warn "$Name を完了できませんでした" }
   try { Set-StateStep $Name $result } catch { Warn 'state.json を書けませんでした' }
 }
 function Refresh-Path {
-  $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+  if ($env:OS -ne 'Windows_NT') { return }
+  $machine=[Environment]::GetEnvironmentVariable('Path','Machine')
+  $user=[Environment]::GetEnvironmentVariable('Path','User')
+  $env:Path = @($machine,$user,$env:Path) -ne '' -join ';'
 }
 function Invoke-Cli([string]$Name,[string[]]$CliArgs) {
   $cmd = Get-Command "$Name.cmd","$Name.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -136,11 +145,43 @@ function Get-OpRef {
   $vault=$env:OP_VAULT
   $config=Join-Path $HOME '.config\daimaru-op\config'
   if (-not $vault -and (Test-Path $config)) {
-    foreach ($line in [IO.File]::ReadAllLines($config)) { if ($line.StartsWith('OP_VAULT=')) { $vault=$line.Substring(9); break } }
+    foreach ($line in [IO.File]::ReadAllLines($config,[Text.Encoding]::UTF8)) { if ($line.StartsWith('OP_VAULT=')) { $vault=$line.Substring(9); break } }
   }
   if (-not $vault) { $vault=$script:KOpVaultDefault }
   if ($vault -notmatch '^[A-Za-z0-9-]+$') { throw 'invalid vault' }
   return 'op://' + $vault + '/' + $script:KOpItem + '/' + $script:KOpField
+}
+function Get-OpAccount {
+  $account=$env:OP_ACCOUNT
+  $config=Join-Path $HOME '.config\daimaru-op\config'
+  if (-not $account -and (Test-Path $config)) {
+    foreach ($line in [IO.File]::ReadAllLines($config,[Text.Encoding]::UTF8)) { if ($line.StartsWith('OP_ACCOUNT=')) { $account=$line.Substring(11); break } }
+  }
+  if (-not $account) { $account='daimaruenterprise.1password.com' }
+  return $account
+}
+function Install-GwsSecret([string]$SecretFile) {
+  if (-not (Have op)) { Hint '管理者に 1Password の招待を頼んでください'; return $false }
+  $dir=Split-Path $SecretFile -Parent
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  Clear-GwsTemps
+  if (-not (Set-PrivateAcl $dir $true)) { return $false }
+  $tmp=Join-Path $dir ('.client_secret-' + [guid]::NewGuid().ToString('N'))
+  $errFile=Join-Path $dir '.op-error.tmp'
+  $opCmd=(Get-Command op.exe,op -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if (-not $opCmd) { return $false }
+  $argsList=@('read',(Get-OpRef))
+  if (-not $env:OP_SERVICE_ACCOUNT_TOKEN) { $argsList=@('--account',(Get-OpAccount)) + $argsList }
+  try {
+    $p=Start-Process -FilePath $opCmd.Source -ArgumentList $argsList -NoNewWindow -Wait -PassThru -RedirectStandardOutput $tmp -RedirectStandardError $errFile
+    if ($p.ExitCode -ne 0) { Hint '管理者に 1Password の招待を頼んでください'; return $false }
+    $j=[IO.File]::ReadAllText($tmp,[Text.Encoding]::UTF8) | ConvertFrom-Json
+    if (-not ($j.installed.client_id -and $j.installed.client_secret)) { return $false }
+    if (-not (Set-PrivateAcl $tmp $false)) { return $false }
+    Move-Item -Force $tmp $SecretFile
+    return $true
+  } catch { return $false }
+  finally { Remove-Item $tmp,$errFile -Force -ErrorAction SilentlyContinue }
 }
 function Set-PrivateAcl([string]$Path,[bool]$Directory) {
   try {
@@ -156,7 +197,8 @@ function Set-PrivateAcl([string]$Path,[bool]$Directory) {
   } catch { return $false }
 }
 function Get-RoleWorkspace([string]$Hub,[string]$Role) {
-  if (Test-Path (Join-Path $Hub "profiles\$Role.json")) { return (Join-Path (Join-Path $env:APPDATA 'daimaru-setup\workspaces') $Role) }
+  $workspace=Join-Path (Join-Path $Hub '.workspaces') $Role
+  if ((Test-Path (Join-Path $Hub "profiles\$Role.json")) -and (Test-Path (Join-Path $workspace '.ready'))) { return $workspace }
   return $Hub
 }
 function Clear-GwsTemps {
@@ -166,29 +208,46 @@ function Clear-GwsTemps {
 function Copy-RoleSkills([string]$Hub,[string]$Role) {
   $file = Join-Path $Hub "profiles\$Role.json"
   if (-not (Test-Path $file)) { return $true }
+  $workspace=Join-Path (Join-Path $Hub '.workspaces') $Role
+  $ready=Join-Path $workspace '.ready'
+  Remove-Item $ready -Force -ErrorAction SilentlyContinue
   try { $data = Get-Content $file -Raw | ConvertFrom-Json } catch { return $false }
   if ($null -eq $data.skills -or $data.skills -is [string]) { return $false }
   foreach ($name in $data.skills) { if ($name -isnot [string] -or $name -notmatch '^[A-Za-z0-9-]+$') { return $false } }
-  $workspace=Get-RoleWorkspace $Hub $Role
   $config=Join-Path $workspace '.claude'
   $dest=Join-Path $config 'skills'
-  New-Item -ItemType Directory -Force -Path $config | Out-Null
-  if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-  New-Item -ItemType Directory -Force -Path $dest | Out-Null
-  foreach ($item in Get-ChildItem (Join-Path $Hub '.claude') -Force) {
-    if ($item.Name -eq 'skills') { continue }
-    $target=Join-Path $config $item.Name
-    if (Test-Path $target) { Remove-Item $target -Recurse -Force }
-    Copy-Item -Path $item.FullName -Destination $target -Recurse -Force
-  }
-  foreach ($name in $data.skills) {
-    $source = Join-Path $Hub ".claude\skills\$name"
-    if (-not (Test-Path $source -PathType Container)) { return $false }
-    $target=Join-Path $dest $name
-    if (Test-Path $target) { Remove-Item -Path $target -Recurse -Force }
-    Copy-Item -Path $source -Destination $target -Recurse -Force
-  }
-  return $true
+  $ready=Join-Path $workspace '.ready'
+  try {
+    $gitInfo=Join-Path $Hub '.git\info'
+    New-Item -ItemType Directory -Force -Path $gitInfo,$config | Out-Null
+    $exclude=Join-Path $gitInfo 'exclude'
+    if (-not (Test-Path $exclude) -or [IO.File]::ReadAllLines($exclude) -notcontains '.workspaces/') { [IO.File]::AppendAllText($exclude,".workspaces/`n",(New-Object Text.UTF8Encoding($false))) }
+    Remove-Item $ready -Force -ErrorAction SilentlyContinue
+    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction Stop }
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    foreach ($item in Get-ChildItem (Join-Path $Hub '.claude') -Force) {
+      if ($item.Name -eq 'skills') { continue }
+      $target=Join-Path $config $item.Name
+      if (Test-Path $target) { Remove-Item $target -Recurse -Force -ErrorAction Stop }
+      Copy-Item -Path $item.FullName -Destination $target -Recurse -Force -ErrorAction Stop
+    }
+    foreach ($name in $data.skills) {
+      $source=Join-Path $Hub ".claude\skills\$name"
+      if (-not (Test-Path $source -PathType Container)) { return $false }
+      Copy-Item -Path $source -Destination (Join-Path $dest $name) -Recurse -Force -ErrorAction Stop
+    }
+    $claude=Join-Path $Hub 'CLAUDE.md'
+    if (Test-Path $claude) { Copy-Item $claude (Join-Path $workspace 'CLAUDE.md') -Force -ErrorAction Stop }
+    $repos=Join-Path $Hub 'repos'
+    if (Test-Path $repos -PathType Container) {
+      $link=Join-Path $workspace 'repos'
+      if (Test-Path $link) { Remove-Item $link -Recurse -Force -ErrorAction Stop }
+      try { New-Item -ItemType Junction -Path $link -Target $repos -ErrorAction Stop | Out-Null; if (-not (Test-Path $link)) { throw 'junction unavailable' } }
+      catch { Copy-Item $repos $link -Recurse -Force -ErrorAction Stop }
+    }
+    New-Item -ItemType File -Path $ready -Force | Out-Null
+    return $true
+  } catch { return $false }
 }
 function Find-ClaudeChrome {
   $root = Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data'

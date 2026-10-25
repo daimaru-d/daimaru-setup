@@ -1,4 +1,6 @@
 # PowerShell 5.1 doctor。setup.ps1 からも単独でも実行できる。
+$script:DoctorTemp=$null
+try {
 $script:DoctorBase = if ($env:DAIMARU_SETUP_BASE) { $env:DAIMARU_SETUP_BASE.TrimEnd('/') } else { 'https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main' }
 if ($script:DoctorBase -notmatch '^https://' -and -not ($env:DAIMARU_SETUP_ALLOW_FILE -eq '1' -and $script:DoctorBase -match '^file://')) { Write-Host 'DAIMARU_DOCTOR: FAIL missing=base'; if ($PSCommandPath) { exit 2 } else { return } }
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
@@ -6,6 +8,7 @@ if ($env:OS -eq 'Windows_NT') { try { Set-ExecutionPolicy -Scope Process -Execut
 $script:DoctorRoot = if ($env:DAIMARU_SETUP_ROOT) { $env:DAIMARU_SETUP_ROOT } elseif ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { $null }
 if (-not $script:DoctorRoot -or -not (Test-Path (Join-Path $script:DoctorRoot 'lib\common.ps1'))) {
   $script:DoctorRoot=Join-Path ([IO.Path]::GetTempPath()) ('daimaru-doctor-' + [guid]::NewGuid().ToString('N'))
+  $script:DoctorTemp=$script:DoctorRoot
   New-Item -ItemType Directory -Force -Path (Join-Path $script:DoctorRoot 'lib'),(Join-Path $script:DoctorRoot 'profiles') | Out-Null
   try { Invoke-WebRequest "$script:DoctorBase/lib/common.ps1" -OutFile (Join-Path $script:DoctorRoot 'lib\common.ps1') -UseBasicParsing -ErrorAction Stop } catch { Write-Host 'DAIMARU_DOCTOR: FAIL missing=common'; if ($PSCommandPath) { exit 2 } else { return } }
 }
@@ -21,6 +24,7 @@ if (-not (Load-Profile $profilePath)) { Write-Host 'DAIMARU_DOCTOR: FAIL missing
 $script:Missing=New-Object 'System.Collections.Generic.List[string]'
 function Doctor-Fail([string]$Slug,[string]$Message,[string]$Fix) { Err $Message; $script:Missing.Add($Slug); Hint $Fix }
 function Doctor-Skip([string]$Message) { Warn "$Message`: 省略" }
+Refresh-Path
 Say "==> daimaru-setup 診断 ($($script:KProfile.ROLE_LABEL) / Windows)"
 Ok 'OS: Windows'
 try { $mem=(Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory; if ($mem -lt 8GB) { Warn 'メモリ: 8GB 未満'; Hint '使わないアプリを閉じてください' } else { Ok 'メモリ: 8GB 以上' } } catch { Warn 'メモリ: 判定できません' }
@@ -30,26 +34,27 @@ if ($policy -eq 'Restricted') { Warn '実行ポリシー: Restricted'; Hint '管
 foreach ($tool in @('claude','node','git','gh','gws','code','op')) {
   $needed=($tool -in @('claude','node','git','gh')) -or (Needs $(if ($tool -eq 'code') { 'vscode' } else { $tool }))
   if (-not $needed) { continue }
-  if (Have $tool) { Ok "PATH: $tool" }
+  if ($(if ($tool -eq 'claude') { Have claude.cmd } else { Have $tool })) { Ok "PATH: $tool" }
   else { Doctor-Fail $(if ($tool -eq 'code') { 'vscode' } else { $tool }) "$tool が見つかりません" "winget / npm で $tool を導入してください" }
 }
 if (Have claude.cmd) { Invoke-Cli claude @('auth','status') 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { Ok 'Claude: ログイン済み' } else { Warn 'Claude: ログイン状態を確認できません'; Hint 'claude.cmd を起動してログインしてください' } }
+$hub=Join-Path $HOME 'daimaru-skills'
+if (-not (Test-Path (Join-Path $hub '.git'))) { Doctor-Fail 'hub' 'daimaru-skills が見つかりません' 'セットアップをもう一度実行してください' }
 if ($env:DAIMARU_DOCTOR_SKIP_NETWORK -eq '1') { Doctor-Skip 'GitHub 権限'; Doctor-Skip 'daimaru-skills 更新' }
 else {
   if (Have gh) { gh auth status 2>$null | Out-Null; $auth=($LASTEXITCODE -eq 0); if ($auth) { gh api repos/daimaru-d/daimaru-skills 2>$null | Out-Null; $auth=($LASTEXITCODE -eq 0) } } else { $auth=$false }
   if ($auth) { Ok 'GitHub: daimaru-d read' } else { Doctor-Fail 'gh-access' 'GitHub の read 権限を確認できません' 'gh auth login または管理者に daimaru-d read 権限を依頼してください' }
-  $hub=Join-Path $HOME 'daimaru-skills'
   if ((Test-Path (Join-Path $hub '.git')) -and (Have git)) {
     Push-Location $hub
     git fetch -q origin 2>$null
     $fetchOk=($LASTEXITCODE -eq 0)
     if ($fetchOk) { $behind=git rev-list --count 'HEAD..@{u}' 2>$null; $fetchOk=($LASTEXITCODE -eq 0 -and $behind -eq '0') }
     Pop-Location
-    if ($fetchOk) { Ok 'daimaru-skills: 最新' } else { Doctor-Fail 'hub-update' 'daimaru-skills は更新が必要か確認できません' 'cd ~/daimaru-skills; git pull' }
-  } else { Doctor-Fail 'hub' 'daimaru-skills が見つかりません' 'セットアップをもう一度実行してください' }
+    if ($fetchOk) { Ok 'daimaru-skills: 最新' } else { Warn 'daimaru-skills は更新が必要か確認できません'; Hint 'セットアップをもう一度実行してください' }
+  }
 }
 if (Needs 'gws') {
-  if (-not (Test-Scopes (Get-StateScopes) $script:KProfile.GWS_SCOPES)) { Doctor-Fail 'gws-scopes' 'gws: この役割の認可スコープが記録されていません' "gws auth login -s $($script:KProfile.GWS_SCOPES) を実行してください" }
+  if (-not (Test-Scopes (Get-StateScopes) $script:KProfile.GWS_SCOPES)) { Doctor-Fail 'gws-scopes' 'gws: この役割の認可スコープが記録されていません' "DAIMARU_ROLE=$script:DoctorRole を指定して setup.ps1 を再実行してください" }
   if ($env:DAIMARU_DOCTOR_SKIP_NETWORK -eq '1') { Doctor-Skip 'gws 実 API' }
   elseif (Have gws.cmd) {
     $errFile=Join-Path ([IO.Path]::GetTempPath()) ('gws-doctor-' + [guid]::NewGuid().ToString('N'))
@@ -96,3 +101,4 @@ foreach ($dir in @((Join-Path $HOME 'Downloads'),(Join-Path $HOME 'Desktop'))) {
 if ($script:Missing.Count -eq 0) { Write-Host 'DAIMARU_DOCTOR: PASS'; if ($PSCommandPath) { exit 0 } else { return } }
 Write-Host ('DAIMARU_DOCTOR: FAIL missing=' + ($script:Missing -join ','))
 if ($PSCommandPath) { exit 2 } else { return }
+} finally { if ($script:DoctorTemp) { Remove-Item $script:DoctorTemp -Recurse -Force -ErrorAction SilentlyContinue } }

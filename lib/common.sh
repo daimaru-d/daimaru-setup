@@ -27,6 +27,7 @@ k_op_vault(){
   local v="${OP_VAULT:-}" line
   if [ -z "$v" ] && [ -f "$HOME/.config/daimaru-op/config" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
       case "$line" in OP_VAULT=*) v="${line#*=}"; break;; esac
     done < "$HOME/.config/daimaru-op/config"
   fi
@@ -38,6 +39,21 @@ k_op_ref(){
   local vault
   vault="$(k_op_vault)" || return 1
   printf 'op://%s/%s/%s' "$vault" "$K_OP_ITEM" "$K_OP_FIELD"
+}
+k_op_account(){
+  local account="${OP_ACCOUNT:-}" line
+  if [ -z "$account" ] && [ -f "$HOME/.config/daimaru-op/config" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      case "$line" in OP_ACCOUNT=*) account="${line#*=}"; break;; esac
+    done < "$HOME/.config/daimaru-op/config"
+  fi
+  printf '%s' "${account:-daimaruenterprise.1password.com}"
+}
+k_op_read(){
+  local account
+  if [ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then op read "$1"
+  else account="$(k_op_account)"; op --account "$account" read "$1"; fi
 }
 check_gws_secret(){
   local f="${GOOGLE_WORKSPACE_CLI_CONFIG_DIR:-$HOME/.config/gws}/client_secret.json"
@@ -57,7 +73,7 @@ install_gws_secret(){
   tmp="$(mktemp "$dir/.client_secret-XXXXXX")" || return 1
   ( trap 'rm -f "$tmp"' EXIT
     chmod 600 "$tmp" || exit 1
-    op read "$ref" > "$tmp" 2>/dev/null || { hint '管理者に 1Password の招待を頼んでください'; exit 1; }
+    k_op_read "$ref" > "$tmp" 2>/dev/null || { hint '管理者に 1Password の招待を頼んでください'; exit 1; }
     node -e 'try{let x=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(x.installed&&x.installed.client_id&&x.installed.client_secret?0:1)}catch(e){process.exit(1)}' "$tmp" 2>/dev/null || { hint '共有 OAuth 設定を確認できません'; exit 1; }
     mv -f "$tmp" "$dir/client_secret.json"
   )
@@ -167,29 +183,39 @@ copy_skills(){
   local hub="$1" role="$2" list name workspace item
   [ -d "$hub/.claude/skills" ] || return 1
   if [ ! -f "$hub/profiles/$role.json" ]; then return 0; fi
+  workspace="$hub/.workspaces/$role"
+  rm -f "$workspace/.ready" || return 1
   have node || return 1
   list="$(node -e 'try{const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).skills;if(!Array.isArray(a)||a.some(x=>typeof x!=="string"||!/^[A-Za-z0-9-]+$/.test(x)))process.exit(2);a.forEach(x=>console.log(x))}catch(e){process.exit(2)}' "$hub/profiles/$role.json")" || return 1
-  workspace="$HOME/.config/daimaru-setup/workspaces/$role"
+  mkdir -p "$hub/.git/info" || return 1
+  if ! grep -qxF '.workspaces/' "$hub/.git/info/exclude" 2>/dev/null; then printf '%s\n' '.workspaces/' >> "$hub/.git/info/exclude" || return 1; fi
   mkdir -p "$workspace/.claude" || return 1
+  rm -f "$workspace/.ready" || return 1
   rm -rf "$workspace/.claude/skills" || return 1
   mkdir -p "$workspace/.claude/skills" || return 1
   for item in "$hub/.claude/"*; do
     [ -e "$item" ] || continue
     [ "${item##*/}" = skills ] && continue
     rm -rf "$workspace/.claude/${item##*/}" || return 1
-    ln -s "$item" "$workspace/.claude/${item##*/}" || return 1
+    cp -R "$item" "$workspace/.claude/${item##*/}" || return 1
   done
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     valid_skill "$name" || return 1
     [ -d "$hub/.claude/skills/$name" ] || return 1
-    ln -s "$hub/.claude/skills/$name" "$workspace/.claude/skills/$name" || return 1
+    cp -R "$hub/.claude/skills/$name" "$workspace/.claude/skills/$name" || return 1
   done <<EOF
 $list
 EOF
+  [ ! -f "$hub/CLAUDE.md" ] || cp "$hub/CLAUDE.md" "$workspace/CLAUDE.md" || return 1
+  if [ -d "$hub/repos" ]; then
+    rm -rf "$workspace/repos" || return 1
+    ln -s "$hub/repos" "$workspace/repos" || return 1
+  fi
+  : > "$workspace/.ready"
 }
 role_workspace(){
-  if [ -f "$1/profiles/$2.json" ]; then printf '%s/.config/daimaru-setup/workspaces/%s' "$HOME" "$2"
+  if [ -f "$1/profiles/$2.json" ] && [ -f "$1/.workspaces/$2/.ready" ]; then printf '%s/.workspaces/%s' "$1" "$2"
   else printf '%s' "$1"; fi
 }
 chrome_extension_state(){
