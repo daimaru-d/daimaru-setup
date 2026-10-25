@@ -138,6 +138,20 @@ install_pkg(){
     *) return 1;;
   esac
 }
+install_npm_global(){
+  local prefix
+  have npm || return 1
+  if [ "${K_OS:-}" = linux ]; then
+    prefix="$(npm config get prefix 2>/dev/null)" || return 1
+    if [ -z "$prefix" ] || [ ! -w "$prefix" ]; then
+      mkdir -p "$HOME/.local/bin" || return 1
+      export PATH="$HOME/.local/bin:$PATH"
+      npm install -g --prefix "$HOME/.local" "$1" >/dev/null 2>&1
+      return $?
+    fi
+  fi
+  npm install -g "$1" >/dev/null 2>&1
+}
 state_get(){
   have node || return 1
   node -e 'try {const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(s.role===process.argv[2]) process.stdout.write((s.steps||{})[process.argv[3]]||"")}catch(e){}' "$K_STATE" "$K_ROLE" "$1" 2>/dev/null
@@ -191,7 +205,7 @@ allow_workspace_repos(){
 const fs=require('fs'),p=process.argv[2],repos=process.env.K_ALLOWED_REPOS.replace(/\\/g,'/');
 let s={};
 if(fs.existsSync(p)){
-  try{s=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){console.error('settings.local.json の JSON が壊れているため変更しません');process.exit(0)}
+  try{const raw=fs.readFileSync(p,'utf8');s=raw.trim()?JSON.parse(raw):{}}catch(e){console.error('settings.local.json の JSON が壊れているため変更しません');process.exit(0)}
   if(!s||typeof s!=='object'||Array.isArray(s)){console.error('settings.local.json の形式が正しくないため変更しません');process.exit(0)}
 }
 if(!s.permissions||typeof s.permissions!=='object'||Array.isArray(s.permissions))s.permissions={};
@@ -229,9 +243,12 @@ copy_skills(){
 $list
 EOF
   [ ! -f "$hub/CLAUDE.md" ] || cp "$hub/CLAUDE.md" "$workspace/CLAUDE.md" || return 1
+  if [ ! -L "$workspace/repos" ] && [ -e "$workspace/repos" ]; then
+    warn 'repos が実ディレクトリのため削除せず、ワークスペースを未準備にします'
+    return 1
+  fi
   if [ -d "$hub/repos" ]; then
-    if [ -L "$workspace/repos" ]; then rm "$workspace/repos" || return 1
-    else rm -rf "$workspace/repos" || return 1; fi
+    if [ -L "$workspace/repos" ]; then rm "$workspace/repos" || return 1; fi
     ln -s "$hub/repos" "$workspace/repos" || return 1
     allow_workspace_repos "$workspace" "$hub" || return 1
   fi

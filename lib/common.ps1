@@ -241,7 +241,7 @@ function Allow-WorkspaceRepos([string]$Workspace,[string]$Hub) {
   $path=Join-Path $Workspace '.claude\settings.local.json'
   $repos=(Join-Path $Hub 'repos').Replace('\','/')
   try {
-    if (Test-Path $path) { $settings=Get-Content $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+    if (Test-Path $path) { $raw=Get-Content $path -Raw -Encoding UTF8 -ErrorAction Stop; if ([string]::IsNullOrWhiteSpace($raw)) { $settings=[pscustomobject]@{} } else { $settings=$raw | ConvertFrom-Json -ErrorAction Stop } }
     else { $settings=[pscustomobject]@{} }
   } catch { Warn 'settings.local.json の JSON が壊れているため変更しません'; return $true }
   if ($null -eq $settings -or $settings -isnot [pscustomobject]) { Warn 'settings.local.json の形式が正しくないため変更しません'; return $true }
@@ -258,7 +258,7 @@ function Copy-RoleSkills([string]$Hub,[string]$Role) {
   $workspace=Join-Path (Join-Path (Join-Path $env:APPDATA 'daimaru-setup') 'workspaces') $Role
   $ready=Join-Path $workspace '.ready'
   Remove-Item $ready -Force -ErrorAction SilentlyContinue
-  try { $data = Get-Content $file -Raw | ConvertFrom-Json } catch { return $false }
+  try { $data = Get-Content $file -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $false }
   if ($null -eq $data.skills -or $data.skills -is [string]) { return $false }
   foreach ($name in $data.skills) { if ($name -isnot [string] -or $name -notmatch '^[A-Za-z0-9-]+$') { return $false } }
   $config=Join-Path $workspace '.claude'
@@ -284,15 +284,23 @@ function Copy-RoleSkills([string]$Hub,[string]$Role) {
     $claude=Join-Path $Hub 'CLAUDE.md'
     if (Test-Path $claude) { Copy-Item $claude (Join-Path $workspace 'CLAUDE.md') -Force -ErrorAction Stop }
     $repos=Join-Path $Hub 'repos'
+    $link=Join-Path $workspace 'repos'
+    $existing=Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+    if ($existing -and ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+      Warn 'repos が実ディレクトリのため削除せず、ワークスペースを未準備にします'
+      return $false
+    }
     if (Test-Path $repos -PathType Container) {
-      $link=Join-Path $workspace 'repos'
-      if (Test-Path $link) {
-        $existing=Get-Item $link -Force -ErrorAction Stop
-        if (($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { [IO.Directory]::Delete($link) }
-        else { Remove-Item $link -Recurse -Force -ErrorAction Stop }
+      if ($existing) { [IO.Directory]::Delete($link) }
+      try {
+        $linkType=if ($env:OS -eq 'Windows_NT') { 'Junction' } else { 'SymbolicLink' }
+        New-Item -ItemType $linkType -Path $link -Target $repos -ErrorAction Stop | Out-Null
+        $created=Get-Item -LiteralPath $link -Force -ErrorAction Stop
+        if (($created.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw 'junction unavailable' }
+      } catch {
+        Warn 'repos のリンクを作れないため、ワークスペースを未準備にします'
+        return $false
       }
-      try { New-Item -ItemType Junction -Path $link -Target $repos -ErrorAction Stop | Out-Null; if (-not (Test-Path $link)) { throw 'junction unavailable' } }
-      catch { Copy-Item $repos $link -Recurse -Force -ErrorAction Stop }
       if (-not (Allow-WorkspaceRepos $workspace $Hub)) { return $false }
     }
     New-Item -ItemType File -Path $ready -Force | Out-Null
@@ -304,7 +312,7 @@ function Find-ClaudeChrome {
   if (-not (Test-Path $root)) { return $false }
   foreach ($f in Get-ChildItem $root -Filter manifest.json -Recurse -ErrorAction SilentlyContinue) {
     if ($f.FullName -notmatch '[\\/]Extensions[\\/]') { continue }
-    try { $m=Get-Content $f.FullName -Raw | ConvertFrom-Json; if ($m.name -notlike '__MSG_*' -and $m.name -match 'Claude') { return $true } } catch { }
+    try { $m=Get-Content $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json; if ($m.name -notlike '__MSG_*' -and $m.name -match 'Claude') { return $true } } catch { }
   }
   return $false
 }

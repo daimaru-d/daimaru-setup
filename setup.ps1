@@ -72,14 +72,14 @@ if (-not (Is-DryRun) -and -not (Is-Update) -and $hubExisted) {
   try {
     git pull --ff-only 2>$null | Out-Null
     $rc=$LASTEXITCODE
-    if ($rc -eq 0 -and (Test-Path '.gitmodules')) { git submodule update --init --recursive 2>$null | Out-Null; $rc=$LASTEXITCODE }
+    if ($rc -eq 0 -and (Test-Path '.gitmodules')) { git submodule sync --recursive 2>$null | Out-Null; $rc=$LASTEXITCODE; if ($rc -eq 0) { git submodule update --init --recursive 2>$null | Out-Null; $rc=$LASTEXITCODE } }
     if ($rc -ne 0) { Warn 'daimaru-skills を更新できませんでした。現在の内容で続行します' }
   } finally { Pop-Location }
 }
 if (Is-Update) {
   Run-Step 'hub-update' { return $false } {
     if (-not (Test-Path (Join-Path $script:KHub '.git'))) { if (Test-Path $script:KHub) { return $false }; git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git $script:KHub | Out-Null }
-    else { Push-Location $script:KHub; try { git pull --recurse-submodules | Out-Null; $rc=$LASTEXITCODE; if ($rc -eq 0) { git submodule update --init --recursive | Out-Null; $rc=$LASTEXITCODE } } finally { Pop-Location }; if ($rc -ne 0) { return $false } }
+    else { Push-Location $script:KHub; try { git pull | Out-Null; $rc=$LASTEXITCODE; if ($rc -eq 0) { git submodule sync --recursive | Out-Null; $rc=$LASTEXITCODE; if ($rc -eq 0) { git submodule update --init --recursive | Out-Null; $rc=$LASTEXITCODE } } } finally { Pop-Location }; if ($rc -ne 0) { return $false } }
     return (Test-Path (Join-Path $script:KHub '.git'))
   }
 }

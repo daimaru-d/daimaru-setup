@@ -7,7 +7,7 @@ if [ -n "$K_SOURCE" ]; then K_HERE="$(cd "$(dirname "$K_SOURCE")" 2>/dev/null &&
 K_BASE="${DAIMARU_SETUP_BASE:-https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main}"
 case "$K_BASE" in https://*) ;; file://*) [ "${DAIMARU_SETUP_ALLOW_FILE:-0}" = 1 ] || { echo 'DAIMARU_SETUP_BASE は https:// のみ指定できます' >&2; exit 2; };; *) echo 'DAIMARU_SETUP_BASE は https:// のみ指定できます' >&2; exit 2;; esac
 K_TMP=''
-if [ -f "$K_HERE/lib/common.sh" ] && [ -d "$K_HERE/profiles" ]; then
+if [ -n "$K_HERE" ] && [ -f "$K_HERE/lib/common.sh" ] && [ -d "$K_HERE/profiles" ]; then
   K_ROOT="$K_HERE"
 elif [ "${DAIMARU_DRY_RUN:-0}" = 1 ]; then
   K_PREVIEW_ROLE="${DAIMARU_ROLE:-base}"
@@ -79,12 +79,12 @@ install_npm_ci(){
 }
 check_op(){ op_ready; }
 install_op(){
-  if [ -f "$K_HERE/scripts/op/setup.sh" ]; then bash "$K_HERE/scripts/op/setup.sh"
+  if [ -n "$K_HERE" ] && [ -f "$K_HERE/scripts/op/setup.sh" ]; then bash "$K_HERE/scripts/op/setup.sh"
   else curl -fsSL "$K_BASE/scripts/op/setup.sh" | bash; fi
   check_op
 }
 check_gws(){ have gws; }
-install_gws(){ have npm && npm i -g @googleworkspace/cli >/dev/null 2>&1; }
+install_gws(){ install_npm_global @googleworkspace/cli; }
 check_gws_auth(){ have gws && scopes_cover "$(state_scopes)" "$GWS_SCOPES" && gws drive files list --params '{"pageSize":1,"fields":"files(id)"}' >/dev/null 2>&1; }
 login_gws(){
   check_gws_secret || { hint '管理者に 1Password の招待を頼んでください'; return 1; }
@@ -132,7 +132,7 @@ check_skills(){ [ ! -f "$K_HUB/profiles/$K_ROLE.json" ] && return 0; return 1; }
 install_skills(){
   copy_skills "$K_HUB" "$K_ROLE" || return 1
 }
-check_clasp(){ have clasp; }; install_clasp(){ have npm && npm install -g @google/clasp >/dev/null 2>&1; }
+check_clasp(){ have clasp; }; install_clasp(){ install_npm_global @google/clasp; }
 check_clasp_auth(){ [ -f "$HOME/.clasprc.json" ]; }; login_clasp(){ have clasp && clasp login; }
 check_gcloud(){ have gcloud; }
 install_gcloud(){
@@ -154,7 +154,7 @@ K_HUB_EXISTED=0
 [ -d "$K_HUB/.git" ] && K_HUB_EXISTED=1
 run_step hub check_hub clone_hub || true
 if ! dry_run && ! update_only && [ "$K_HUB_EXISTED" = 1 ]; then
-  (cd "$K_HUB" && git pull --ff-only >/dev/null 2>&1 && { [ ! -f .gitmodules ] || git submodule update --init --recursive >/dev/null 2>&1; }) || warn 'daimaru-skills を更新できませんでした。現在の内容で続行します'
+  (cd "$K_HUB" && git pull --ff-only >/dev/null 2>&1 && { [ ! -f .gitmodules ] || { git submodule sync --recursive >/dev/null 2>&1 && git submodule update --init --recursive >/dev/null 2>&1; }; }) || warn 'daimaru-skills を更新できませんでした。現在の内容で続行します'
 fi
 if update_only; then run_step hub-update check_never update_hub || true; fi
 run_step npm-ci check_npm_ci install_npm_ci || true
