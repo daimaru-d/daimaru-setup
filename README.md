@@ -1,36 +1,45 @@
-# daimaru-setup — 大丸 業務ハブのかんたん初期セットアップ
+# daimaru-setup
 
-大丸の業務ハブ [daimaru-skills](https://github.com/daimaru-d/daimaru-skills) を、
-**むずかしい設定なしで** パソコンに用意するためのスクリプトです（macOS / Linux / Windows 対応）。
+## 1行貼るだけで仕事の道具がそろいます
 
-## 使い方（コピペ1行）
+下の1行を貼り付けて Enter を押すと、仕事に必要な道具が一度にそろいます。同じ操作をもう一度しても壊れることはなく、足りない所だけが直ります。途中でブラウザが開いたら、画面の案内どおりにログインしてください。
 
-ターミナルに**下の1行を貼って Enter**するだけ。途中ブラウザが開いたら、案内されたアカウントでログインしてください。
-
-| OS | 開くもの | 貼る1行 |
-|:--|:--|:--|
-| **macOS / Linux** | ターミナル | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh \| bash` |
-| **Windows** | Windows PowerShell | `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 \| iex` |
-
-最後に Claude Code が**安全バイパス**（プロンプト最小・破壊操作はブロック）で起動します。
-起動後の流れ: `bash .claude/skills/bi-dashboard/harness/bi-doctor.sh`（自己診断）→ `/bi-coach`（ダッシュボード作成）。
-
-## このスクリプトがやること
-
-| 手順 | 内容 |
+| OS | 実行する一行 |
 |:--|:--|
-| 1 | **Claude Code** を導入（公式インストーラ。Win は npm） |
-| 2 | 開発ツールを導入: Git / Node.js / gh / **gcloud / clasp / cloud-sql-proxy** |
-| 3 | GitHub にブラウザでログイン |
-| 4 | 業務ハブ `daimaru-skills` を取り込み（`npm ci` 含む） |
-| 5 | BI用ログイン: gcloud / **ADC(`application-default`)** / clasp → 安全バイパスで Claude 起動 |
-| 6 | **パスワード金庫（1Password）**: 1Password CLI を導入し、Claude Code にスキル `op-secrets`（見張りつき）を入れる |
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh \| bash` |
+| Windows PowerShell | `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 \| iex` |
 
-> `cloud-sql-proxy` は `gcloud components install cloud-sql-proxy` で導入（手動DL不要・自動でPATH）。
-> ブラウザ認証（GitHub / Google / ADC / clasp）は途中で開くので、各自ログインしてください。
+## 自分の役割を選ぶ
 
-> 取り込みに失敗する場合、ほとんどは「対象リポジトリの閲覧権限が無い」だけです。
-> その場合は管理者に `daimaru-d` への read 権限の付与を依頼してください。
+役割は、設計（sekkei）、統合ダッシュボード（togo）、用地（yochi）、総務経理（somu-keiri）、基本（base）の5つです。実行する前に、DAIMARU_ROLE という設定で自分の役割を指定します。役割が決まっていなければ基本（base）のまま進めてよく、決まったあとで役割を指定してもう一度実行すれば足ります。
+
+| 値 | 準備する主なもの |
+|:--|:--|
+| `base` | Git、Node.js、GitHub CLI、Claude Code |
+| `sekkei` | 共通の道具、VS Code、gws、Chrome と拡張の案内 |
+| `togo` | 共通の道具、gws、clasp、gcloud、ADC |
+| `yochi` | 共通の道具、gws（Gmail、Drive） |
+| `somu-keiri` | 共通の道具、gws、1Password、[経理の追加手順](./scripts/keiri/) |
+
+例: macOS / Linux は `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh | DAIMARU_ROLE=sekkei bash`、Windows は `$env:DAIMARU_ROLE='sekkei'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 | iex` を実行します。役割を指定しなければ対話端末から選べます。
+
+役割の選択は次回以降も保存されます。役割プロファイルがある場合、Claude は `~/.config/daimaru-setup/workspaces/<役割>`（Windows は `%APPDATA%\daimaru-setup\workspaces\<役割>`）から起動します。この作業ディレクトリの `.claude/skills` には選んだ役割のスキルだけを配置し、hub 本体は変更しません。ワークスペースからは業務リポジトリのスキルも参照できます。
+
+## うまくいっているか確かめる
+
+doctor という診断を実行すると、できていない所とその直し方が1行ずつ表示されます。最後の行が DAIMARU_DOCTOR: PASS なら準備は完了です。FAIL と出た場合は、表示された行をそのまま管理者に伝えてください。
+| 操作 | macOS / Linux | Windows PowerShell |
+|:--|:--|:--|
+| 予定だけ表示 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh \| DAIMARU_DRY_RUN=1 DAIMARU_ROLE=sekkei bash` | `$env:DAIMARU_DRY_RUN='1'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 \| iex` |
+| 更新 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.sh \| DAIMARU_UPDATE=1 bash` | `$env:DAIMARU_UPDATE='1'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 \| iex` |
+| 診断 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.sh \| bash` | `irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.ps1 \| iex` |
+| 通信せず診断 | `curl -fsSL https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.sh \| DAIMARU_DOCTOR_SKIP_NETWORK=1 bash` | `$env:DAIMARU_DOCTOR_SKIP_NETWORK='1'; irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/doctor/doctor.ps1 \| iex` |
+
+共有 OAuth 設定が読めない場合は、管理者に 1Password の招待を頼んでください。
+
+管理者向け: [一回だけの準備](./docs/admin_一回だけの準備.md)。1Password の詳しい使い方は [運用ガイド](./docs/op-secrets_運用ガイド.md)。
+
+開発テスト: `bash tests/scripts.test.sh && bash tests/kitting.test.sh && node --test tests/op-guard.test.js`
 
 ## うまくいかないとき
 
@@ -38,7 +47,7 @@
 - **Windows「スクリプトの実行が無効（running scripts is disabled / PSSecurityException）」**
   → このスクリプトは `.cmd` 版を直接呼ぶよう対策済みです。**もう一度この1行を実行**してください（入ったソフトは自動スキップ）。
   組織ポリシーで制限された PC では、**次回からの起動は `claude` ではなく `claude.cmd`** と打ってください。
-- **詰まったら**: Claude 起動後に `bash .claude/skills/bi-dashboard/harness/bi-doctor.sh` を実行すると、不足が OS別の直し方付きで一覧表示されます。
+- **詰まったら**: `bi-dashboard` がある役割では、Claude 起動後に `bash .claude/skills/bi-dashboard/harness/bi-doctor.sh` を実行すると、不足が OS別の直し方付きで一覧表示されます。
 
 ## 安全性について
 

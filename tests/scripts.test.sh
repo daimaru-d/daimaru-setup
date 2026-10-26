@@ -28,6 +28,7 @@ unset OP_ACCOUNT OP_VAULT OP_ENV_FILE OP_SA_MODE OP_SERVICE_ACCOUNT_TOKEN OP_STU
 FAKE_SECRET='FAKE-S3cr3t-Value-for-test'
 FAKE_USER='someone@example.com'
 reset_stub(){ : > "$OP_STUB_LOG"; rm -f "$OP_STUB_DIR"/template-*.json; }
+tmp_clean(){ [ -z "$(find "$TMPDIR" -mindepth 1 -maxdepth 1 ! -name xcrun_db -print -quit)" ]; }
 
 echo "== 構文"
 SH_FILES=("$S"/*.sh "$ROOT/scripts/op/setup.sh" "$ROOT/scripts/op/sa-token.sh" "$ROOT/tests/scripts.test.sh" "$ROOT/tests/stubs/op" "$ROOT/setup.sh")
@@ -47,11 +48,14 @@ for f in "$S"/*.js "$ROOT"/tests/*.js; do check "node --check ${f#"$ROOT"/}" nod
 for f in setup.ps1 sa-token.ps1; do
   check "scripts/op/$f は BOM なし（irm | iex 用）" bash -c "[ \"\$(head -c 3 '$ROOT/scripts/op/$f' | od -An -tx1 | tr -d ' ')\" != efbbbf ]"
 done
-# .gitattributes: Windows で clone しても .sh が LF のまま（i/lf と attr/text eol=lf）
-eol="$(git -C "$ROOT" ls-files --eol -- '*.sh' tests/stubs/op)"
-check ".gitattributes: *.sh と stub は i/lf・eol=lf" bash -c '[ -n "$1" ] && ! printf "%s\n" "$1" | grep -v "i/lf" | grep -q . && ! printf "%s\n" "$1" | grep -v "attr/text eol=lf" | grep -q .' _ "$eol"
-eol="$(git -C "$ROOT" ls-files --eol -- '*.ps1')"
-check ".gitattributes: *.ps1 は eol=crlf" bash -c '[ -n "$1" ] && ! printf "%s\n" "$1" | grep -v "attr/text eol=crlf" | grep -q .' _ "$eol"
+for f in "$ROOT/setup.ps1" "$ROOT/doctor/doctor.ps1"; do
+  check "${f#"$ROOT"/} は BOM なし（irm | iex 用）" bash -c '[ "$(head -c 3 "$1" | od -An -tx1 | tr -d " ")" != efbbbf ]' _ "$f"
+done
+check 'lib/common.ps1 は BOM あり' bash -c '[ "$(head -c 3 "$1" | od -An -tx1 | tr -d " ")" = efbbbf ]' _ "$ROOT/lib/common.ps1"
+# .gitattributes と実ファイルを直接確認し、テスト中に Git を呼ばない。
+check '.gitattributes: sh と stub は eol=lf' bash -c 'grep -qxF "*.sh text eol=lf" "$1/.gitattributes" && grep -qxF "tests/stubs/op text eol=lf" "$1/.gitattributes"' _ "$ROOT"
+check '.gitattributes: ps1 は eol=crlf' grep -qxF '*.ps1 text eol=crlf' "$ROOT/.gitattributes"
+check '配布 sh と stub の実ファイルは LF' node -e 'const fs=require("fs");for(const p of process.argv.slice(1)){if(fs.readFileSync(p).includes(Buffer.from("\r")))process.exit(1)}' "$ROOT/setup.sh" "$ROOT/doctor/doctor.sh" "$ROOT/lib/common.sh" "$ROOT/tests/stubs/op"
 
 echo "== lib.sh"
 (
@@ -248,7 +252,7 @@ check "テンプレートに値が届く" node -e '
   const t=require(process.argv[1]); const f=Object.fromEntries(t.fields.map(x=>[x.id,x.value]));
   process.exit(t.title==="andpad" && t.category==="LOGIN" && f.username===process.argv[2] && f.password===process.argv[3]
     && t.urls[0].href==="https://andpad.jp" ? 0 : 1)' "$OP_STUB_DIR/template-1.json" "$FAKE_USER" "$FAKE_SECRET"
-check "一時ファイルを残さない" [ -z "$(ls "$TMPDIR")" ]
+check "一時ファイルを残さない" tmp_clean
 reset_stub
 out="$(printf '\n\n' | bash "$S/op-item-add.sh" kintone-keiri --totp 2>&1)"; rc=$?
 check "空のパスワードでも作る（アプリで後から）" bash -c '[ "$1" = 0 ] && [[ "$2" == *"パスワード欄は空"* ]]' _ "$rc" "$out"
@@ -266,7 +270,10 @@ check "同じ名前が複数なら止めて一覧を出す" bash -c '[ "$1" = 2 
 check "同じ名前が複数なら create を呼ばない" bash -c "! grep -q 'item create' '$OP_STUB_LOG'"
 
 echo "== op-env-migrate.sh"
-PROJ="$T/repo"; mkdir -p "$PROJ/andpad-browser"; git -C "$PROJ" init -q
+PROJ="$T/repo"; mkdir -p "$PROJ/andpad-browser" "$PROJ/.git" "$T/git-bin"
+printf '#!/bin/sh\n[ "$1" = -C ] && [ "$3" = rev-parse ] && [ "$4" = --show-toplevel ] || exit 1\nprintf "%%s\\n" "$OP_TEST_REPO"\n' > "$T/git-bin/git"
+chmod +x "$T/git-bin/git"
+export OP_TEST_REPO="$PROJ" PATH="$T/git-bin:$PATH"
 printf 'node_modules\n' > "$PROJ/.gitignore"
 printf '# AndPad メモ: 旧パスワード=%s\nANDPAD_EMAIL=%s\nANDPAD_PASSWORD="%s"\n\nDRY_RUN=1\nSHEET_ID=abc123\nBYPASS_CACHE=1\nSLACK_WEBHOOK=https://hooks.example.com/%s\nDB_DSN=postgres://u:%s@db.example.com/x\nMIRROR=https://u:%s@mirror.example.com/\n' \
   "$FAKE_SECRET" "$FAKE_USER" "$FAKE_SECRET" "$FAKE_SECRET" "$FAKE_SECRET" "$FAKE_SECRET" > "$PROJ/andpad-browser/.env"
@@ -291,7 +298,7 @@ check "テンプレートに username / password で届く" node -e '
   process.exit(t.title==="andpad-browser" && f.username===process.argv[2] && f.password===process.argv[3] && !("dry_run" in f)
     && !("sheet_id" in f) && !("bypass_cache" in f) && /hooks/.test(f.slack_webhook) && /@db/.test(f.db_dsn) && /@mirror/.test(f.mirror) ? 0 : 1)' \
   "$OP_STUB_DIR/template-1.json" "$FAKE_USER" "$FAKE_SECRET"
-check "一時ファイルを残さない" [ -z "$(ls "$TMPDIR")" ]
+check "一時ファイルを残さない" tmp_clean
 out="$(bash "$S/op-env-migrate.sh" "$PROJ/andpad-browser/.env.op.example" --yes 2>&1)"; rc=$?
 check ".env.op が既にあれば上書きしない" [ "$rc" = 2 ]
 # 既存の項目へ足す（op item edit）・確認で N なら .env を残す
@@ -322,7 +329,7 @@ check "--overwrite: 新しい値が届く" node -e '
 mkdir -p "$PROJ/dup"; printf 'DUP_PASSWORD=%s\n' "$FAKE_SECRET" > "$PROJ/dup/.env"
 out="$(OP_STUB_ITEM_STATE=duplicate bash "$S/op-env-migrate.sh" "$PROJ/dup/.env" --yes 2>&1)"; rc=$?
 check "移行: 同じ名前が複数なら止める" bash -c '[ "$1" = 2 ] && [[ "$2" == *"複数あります"* ]] && [ -f "$3" ]' _ "$rc" "$out" "$PROJ/dup/.env"
-check "一時ファイルを残さない（移行の後）" [ -z "$(ls "$TMPDIR")" ]
+check "一時ファイルを残さない（移行の後）" tmp_clean
 
 echo ""
 echo "結果: ok=$PASS_N fail=$FAIL_N"

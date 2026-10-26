@@ -1,141 +1,181 @@
-# ============================================================
-# 大丸 業務ハブ（daimaru-skills）初期セットアップ - Windows用
-# 使い方: PowerShell に次の1行を貼って Enter するだけ
-#   irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/setup.ps1 | iex
-# ============================================================
-# gh / git / npm などの外部コマンドは標準エラーへ進捗や通知を書く。
-# "Stop" だとそれだけで NativeCommandError になり途中で止まるため "Continue" にする。
-# 重要な工程は後段で終了コード($LASTEXITCODE)を見て個別に判定する。
-$ErrorActionPreference = "Continue"
-
-# --- 実行ポリシー対策 ---
-# Windows では npm / claude の実体が .ps1（PowerShellスクリプト）のため、
-# 「スクリプトの実行が無効」だと npm.ps1 が読めずに失敗する。
-# (1) 可能なら本人スコープを RemoteSigned にして今後も .ps1 を使えるようにする（管理者不要）
-# (2) 組織ポリシーで変更できない場合に備え、このスクリプト内では .cmd 版を直接呼ぶ
-$script:PolicyOk = $true
+# Windows PowerShell 5.1 / irm .../setup.ps1 | iex
+$ErrorActionPreference = 'Continue'
+$script:KBase = if ($env:DAIMARU_SETUP_BASE) { $env:DAIMARU_SETUP_BASE.TrimEnd('/') } else { 'https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main' }
+if ($script:KBase -notmatch '^https://' -and -not ($env:DAIMARU_SETUP_ALLOW_FILE -eq '1' -and $script:KBase -match '^file://')) { Write-Host 'DAIMARU_SETUP_BASE は https:// のみ指定できます'; return }
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+if ($env:OS -eq 'Windows_NT') { try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch { Write-Host '実行ポリシーは組織設定に従います。続行します' } }
+$script:KRoot = $null
+$script:KTemp = $null
+$localRoot = $null
 try {
-  Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
-} catch {
-  $script:PolicyOk = $false
-  Write-Host "  （実行ポリシーは組織設定のため変更できませんでした。.cmd 経由で続行します）" -ForegroundColor DarkYellow
-}
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
-
-# winget でソフトを入れた直後は PATH が未反映になるため、都度読み直す
-function Refresh-Path {
-  $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
-              [Environment]::GetEnvironmentVariable("Path","User")
-}
-# .ps1 を避けて .cmd / .exe の実体を探して呼ぶ（実行ポリシーに左右されない）
-function Invoke-Cli {
-  param([string]$Name, [string[]]$CliArgs)
-  $cmd = (Get-Command "$Name.cmd","$Name.exe" -ErrorAction SilentlyContinue | Select-Object -First 1)
-  if (-not $cmd) { $cmd = Get-Command $Name -ErrorAction Stop }
-  & $cmd.Source @CliArgs
-}
-
-Write-Host ""
-Write-Host "==> 1/6 必要なソフトを入れています (Git / Node.js / GitHub CLI)" -ForegroundColor Cyan
-winget install --id Git.Git           -e --accept-package-agreements --accept-source-agreements
-winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
-winget install --id GitHub.cli        -e --accept-package-agreements --accept-source-agreements
-Refresh-Path
-
-Write-Host ""
-Write-Host "==> 2/6 Claude Code を入れています" -ForegroundColor Cyan
-# npm.ps1 ではなく npm.cmd を直接呼ぶ（スクリプト実行が無効でも動く）
-Invoke-Cli npm @("install","-g","@anthropic-ai/claude-code")
-Refresh-Path
-if (-not (Get-Command claude.cmd,claude.exe,claude -ErrorAction SilentlyContinue)) {
-  Write-Host "  ! Claude Code の導入に失敗した可能性があります。上のログを確認してください。" -ForegroundColor Red
-}
-
-Write-Host ""
-Write-Host "==> 3/6 GitHub にログインします。ブラウザが開いたら、許可された GitHub アカウントでログインしてください" -ForegroundColor Cyan
-# 未ログインだと gh auth status は stderr に出力し終了コード非0（EAP=Continue なので止まらない）
-gh auth status 2>$null
-if ($LASTEXITCODE -ne 0) { gh auth login --hostname github.com --git-protocol https --web }
-gh auth setup-git
-# ログインできていないと private リポジトリの取り込みに失敗するので、ここで確認する
-gh auth status 2>$null
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "  ! GitHub にログインできていません。もう一度この1行を実行してログインしてください。" -ForegroundColor Red
+if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'profiles'))) { $localRoot=$PSScriptRoot }
+if ($localRoot) { $script:KRoot=$localRoot }
+elseif ($env:DAIMARU_DRY_RUN -eq '1') {
+  $role=if ($env:DAIMARU_ROLE) { $env:DAIMARU_ROLE } else { $stateFile=Join-Path $env:APPDATA 'daimaru-setup\state.json'; if (Test-Path $stateFile) { try { (Get-Content $stateFile -Raw -ErrorAction Stop | ConvertFrom-Json).role } catch { 'base' } } else { 'base' } }
+  if (@('base','sekkei','togo','yochi','somu-keiri') -notcontains $role) { Write-Host '役割名が正しくありません'; return }
+  Write-Host "予定: $role の準備（オンラインのプロファイル取得を省略）"
+  Write-Host '予定: Claude Code / Git / Node.js / GitHub CLI / daimaru-skills / doctor'
+  switch ($role) {
+    'sekkei' { Write-Host '予定: VS Code / gws / Chrome / 1Password / Chrome 拡張の案内' }
+    'togo' { Write-Host '予定: gws / clasp / gcloud / ADC / 1Password' }
+    'yochi' { Write-Host '予定: gws / 1Password' }
+    'somu-keiri' { Write-Host '予定: gws / 1Password / 経理の追加手順' }
+  }
   return
-}
-# ★最頻エラー対策: 「daimaru-d を見られるアカウントか」を確認（別アカウントだと取り込みが Repository not found）
-gh api repos/daimaru-d/daimaru-skills 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "  ! ログイン中のアカウントは daimaru-d を見られません（取り込みが失敗します）。" -ForegroundColor Red
-  Write-Host "    別アカウントがある人: gh auth switch で切替 → もう一度この1行を実行。" -ForegroundColor Yellow
-  Write-Host "    権限が無い人: 管理者(篠田/神谷)へ daimaru-d の read 権限付与を依頼してください。" -ForegroundColor Yellow
-  return
-}
-
-Write-Host ""
-Write-Host "==> 4/6 道具箱（daimaru-skills）を取り込んでいます" -ForegroundColor Cyan
-Set-Location $HOME
-if (-not (Test-Path "$HOME\daimaru-skills")) {
-  git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git
 } else {
-  Write-Host "    既に取り込み済みです。最新へ更新します" -ForegroundColor DarkGray
-  Set-Location "$HOME\daimaru-skills"
-  git pull --recurse-submodules
+  $script:KTemp=Join-Path ([IO.Path]::GetTempPath()) ('daimaru-setup-' + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Force -Path (Join-Path $script:KTemp 'lib'),(Join-Path $script:KTemp 'profiles'),(Join-Path $script:KTemp 'doctor') | Out-Null
+  try { Invoke-WebRequest "$script:KBase/lib/common.ps1" -OutFile (Join-Path $script:KTemp 'lib\common.ps1') -UseBasicParsing -ErrorAction Stop } catch { Write-Host '共通部品を取得できません'; return }
+  $script:KRoot=$script:KTemp
 }
-# 取り込めたか確認（権限が無い等で失敗した場合のフォロー）
-if (-not (Test-Path "$HOME\daimaru-skills\.git")) {
-  Write-Host "  ! 道具箱を取り込めませんでした。多くは『閲覧権限が無い』ことが原因です。" -ForegroundColor Red
-  Write-Host "    管理者に daimaru-d への read 権限付与を依頼してください。" -ForegroundColor Red
-  return
+try { . ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $script:KRoot 'lib\common.ps1'),[Text.Encoding]::UTF8))) } catch { Write-Host '共通部品を読み込めません。セットアップを中止します'; return }
+if (-not (Get-Command Select-Role -ErrorAction SilentlyContinue)) { Write-Host '共通部品を読み込めません。セットアップを中止します'; return }
+if (-not (Select-Role)) { return }
+$profileFile=Join-Path $script:KRoot "profiles\$script:KRole.env"
+if (-not (Test-Path $profileFile)) {
+  try { Invoke-WebRequest "$script:KBase/profiles/$script:KRole.env" -OutFile $profileFile -UseBasicParsing -ErrorAction Stop } catch { Err 'プロファイルを取得できません'; return }
 }
-Set-Location "$HOME\daimaru-skills"
-
-Write-Host ""
-Write-Host "==> 5/6 BIダッシュボード用の道具とログイン" -ForegroundColor Cyan
-# gcloud / clasp / cloud-sql-proxy
-if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
-  winget install --id Google.CloudSDK -e --accept-package-agreements --accept-source-agreements
-  Refresh-Path
+if (-not (Load-Profile $profileFile)) { Err 'プロファイルを読めません'; return }
+$env:DAIMARU_ROLE=$script:KRole
+Say "==> $($script:KProfile.ROLE_LABEL) の準備"
+if ($script:KProfile.NOTE) { Hint $script:KProfile.NOTE }
+$script:KHub=Join-Path $HOME 'daimaru-skills'
+if (-not (Is-DryRun)) { Clear-GwsTemps }
+if (-not (Is-DryRun) -and -not (Is-Update)) {
+  try { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop } catch { Warn '実行ポリシーは組織設定に従います。.cmd 経由で続行します' }
 }
-Invoke-Cli npm @("install","-g","@google/clasp")
-if (Get-Command gcloud -ErrorAction SilentlyContinue) {
-  gcloud components install cloud-sql-proxy --quiet 2>$null   # 手動DL不要・自動でPATH
+Run-Step 'git' { Have git } { winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; Have git }
+Run-Step 'node' { Have node } { winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; Have node }
+Run-Step 'gh' { Have gh } { winget install --id GitHub.cli -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; Have gh }
+Run-Step 'claude' { Have-Cli claude } { Invoke-Cli npm @('install','-g','@anthropic-ai/claude-code') | Out-Null; Refresh-Path; Have-Cli claude }
+Run-Step 'gh-access' { if (-not (Have gh)) { return $false }; gh auth status 2>$null | Out-Null;   if ($LASTEXITCODE -ne 0) { return $false }; gh api repos/daimaru-d/daimaru-skills 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } {
+  if (-not (Have gh)) { return $false }
+  gh auth status 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { gh auth login --hostname github.com --git-protocol https --web | Out-Host }
+  gh api repos/daimaru-d/daimaru-skills 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { Hint '管理者に daimaru-d の read 権限を依頼してください'; return $false }
+  return $true
 }
-# DB接続ライブラリ(pg)
-if (Test-Path "$HOME\daimaru-skills\repos\eigyo-talk-analyzer") {
-  Push-Location "$HOME\daimaru-skills\repos\eigyo-talk-analyzer"
-  Invoke-Cli npm @("ci")
-  Pop-Location
+if (-not (Is-DryRun) -and (Have gh)) { gh auth setup-git 2>$null | Out-Null }
+$hubExisted=Test-Path (Join-Path $script:KHub '.git')
+Run-Step 'hub' {
+  if (-not (Test-Path (Join-Path $script:KHub '.git'))) { return $false }
+  if (Test-Path (Join-Path $script:KHub '.gitmodules')) { Push-Location $script:KHub; try { git submodule update --init --recursive | Out-Null; return ($LASTEXITCODE -eq 0) } finally { Pop-Location } }
+  return $true
+} {
+  if (Test-Path $script:KHub) { return $false }
+  git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git $script:KHub | Out-Null
+  return (Test-Path (Join-Path $script:KHub '.git'))
 }
-# ログイン（ブラウザが開きます）
-if (Get-Command gcloud -ErrorAction SilentlyContinue) {
-  gcloud auth login 2>$null
-  gcloud auth application-default login 2>$null   # ★ADC（proxyが使う。無いと401）
+if (-not (Is-DryRun) -and -not (Is-Update) -and $hubExisted) {
+  Push-Location $script:KHub
+  try {
+    git pull --ff-only 2>$null | Out-Null
+    $rc=$LASTEXITCODE
+    if ($rc -eq 0 -and (Test-Path '.gitmodules')) { git submodule sync --recursive 2>$null | Out-Null; $rc=$LASTEXITCODE; if ($rc -eq 0) { git submodule update --init --recursive 2>$null | Out-Null; $rc=$LASTEXITCODE } }
+    if ($rc -ne 0) { Warn 'daimaru-skills を更新できませんでした。現在の内容で続行します' }
+  } finally { Pop-Location }
 }
-if (Get-Command clasp -ErrorAction SilentlyContinue) {
-  if (-not (Test-Path "$HOME\.clasprc.json")) { clasp login 2>$null }
+if (Is-Update) {
+  Run-Step 'hub-update' { return $false } {
+    if (-not (Test-Path (Join-Path $script:KHub '.git'))) { if (Test-Path $script:KHub) { return $false }; git clone --recurse-submodules https://github.com/daimaru-d/daimaru-skills.git $script:KHub | Out-Null }
+    else { Push-Location $script:KHub; try { git pull | Out-Null; $rc=$LASTEXITCODE; if ($rc -eq 0) { git submodule sync --recursive | Out-Null; $rc=$LASTEXITCODE; if ($rc -eq 0) { git submodule update --init --recursive | Out-Null; $rc=$LASTEXITCODE } } } finally { Pop-Location }; if ($rc -ne 0) { return $false } }
+    return (Test-Path (Join-Path $script:KHub '.git'))
+  }
 }
-Write-Host "  ! 新規GAS作成には各自Googleで Apps Script API 有効化が必要: https://script.google.com/home/usersettings" -ForegroundColor Yellow
-
-Write-Host ""
-Write-Host "==> 6/6 パスワード金庫（1Password）を Claude Code で使えるようにしています" -ForegroundColor Cyan
-# 中身は scripts/op/setup.ps1（単独でも実行できる）。失敗しても全体は止めない
-try {
-  irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/setup.ps1 | iex
-} catch {
-  Write-Host "  ! パスワード金庫の準備に失敗しました（後で: irm https://raw.githubusercontent.com/daimaru-d/daimaru-setup/main/scripts/op/setup.ps1 | iex）" -ForegroundColor Yellow
+$npmRepo=Join-Path $script:KHub 'repos\eigyo-talk-analyzer'
+Run-Step 'npm-ci' { Test-NpmCi $npmRepo } { Install-NpmCi $npmRepo }
+if (Needs 'op') {
+  Run-Step 'op' { (Test-OpReady) } {
+    $opFile=Join-Path $script:KRoot 'scripts\op\setup.ps1'
+    try {
+      if (Test-Path $opFile) { Invoke-Expression ([IO.File]::ReadAllText($opFile,[Text.Encoding]::UTF8)) } else { Invoke-Expression (Get-RemoteScript "$script:KBase/scripts/op/setup.ps1") }
+      return (Test-OpReady)
+    } catch { return $false }
+  }
 }
-Set-Location "$HOME\daimaru-skills"
-
-Write-Host ""
-Write-Host "==> 準備ができました。Claude Code を起動します（安全バイパス：プロンプト最小・破壊操作はブロック）" -ForegroundColor Green
-Write-Host "    起動後の流れ: bash .claude/skills/bi-dashboard/harness/bi-doctor.sh （自己診断）→ /bi-coach" -ForegroundColor Green
-if (-not $script:PolicyOk) {
-  Write-Host ""
-  Write-Host "  【次回以降の起動について】この PC は組織ポリシーでスクリプト実行が制限されています。" -ForegroundColor Yellow
-  Write-Host "  次回からは、フォルダ $HOME\daimaru-skills で  claude.cmd  と打って起動してください" -ForegroundColor Yellow
-  Write-Host "  （ふつうの『claude』が使えない場合の回避策です）" -ForegroundColor Yellow
+if (Needs 'gws') {
+  Run-Step 'gws' { Have gws.cmd } { Invoke-Cli npm @('i','-g','@googleworkspace/cli') | Out-Null; Refresh-Path; return (Have gws.cmd) }
+  if (-not $env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR -and -not (Is-DryRun)) {
+    $env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR=Join-Path $HOME '.config\gws'
+    [Environment]::SetEnvironmentVariable('GOOGLE_WORKSPACE_CLI_CONFIG_DIR',$env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR,'User')
+  }
+  $gwsDir=if ($env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR) { $env:GOOGLE_WORKSPACE_CLI_CONFIG_DIR } else { Join-Path $HOME '.config\gws' }
+  $secretFile=Join-Path $gwsDir 'client_secret.json'
+  $validSecret={
+    if (-not (Test-Path $secretFile)) { return $false }
+    try {
+      if (-not (Set-PrivateAcl $secretFile $false)) { return $false }
+      $j=[IO.File]::ReadAllText($secretFile,[Text.Encoding]::UTF8) | ConvertFrom-Json
+      return [bool]($j.installed.client_id -and $j.installed.client_secret)
+    } catch { return $false }
+  }
+  if (Is-Update) { & $validSecret | Out-Null }
+  Run-Step 'gws-secret' $validSecret { return (Install-GwsSecret $secretFile) }
+  Run-Step 'gws-auth' { if (-not (Have gws.cmd)) { return $false }; Invoke-Gws @('drive','files','list') 2>$null | Out-Null; return ($LASTEXITCODE -eq 0 -and (Test-Scopes (Get-StateScopes) $script:KProfile.GWS_SCOPES)) } {
+    if (-not (& $validSecret)) { Hint '管理者に 1Password の招待を頼んでください'; return $false }
+    Invoke-Cli gws @('auth','login','-s',$script:KProfile.GWS_SCOPES) | Out-Host
+    if ($LASTEXITCODE -ne 0) { return $false }
+    Invoke-Gws @('drive','files','list') 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    Set-StateScopes $script:KProfile.GWS_SCOPES
+    return $true
+  }
 }
-Write-Host ""
-# claude.ps1 を避けて claude.cmd / claude.exe を起動（安全バイパス＝acceptEdits）
-Invoke-Cli claude @("--permission-mode","acceptEdits")
+if (Needs 'vscode') {
+  Run-Step 'vscode' { Have code.cmd } { winget install --id Microsoft.VisualStudioCode -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; return (Have code.cmd) }
+  Run-Step 'vscode-extensions' {
+    if (-not (Have code.cmd)) { return $false }
+    $installed=@(Invoke-Cli code @('--list-extensions'))
+    foreach ($ext in @('ms-ceintl.vscode-language-pack-ja','anthropic.claude-code') + @($script:KProfile.VSCODE_EXTENSIONS -split ' ' | Where-Object { $_ })) { if ($installed -notcontains $ext) { return $false } }
+    return $true
+  } {
+    if (-not (Have code.cmd)) { return $false }
+    foreach ($ext in @('ms-ceintl.vscode-language-pack-ja','anthropic.claude-code') + @($script:KProfile.VSCODE_EXTENSIONS -split ' ' | Where-Object { $_ })) { Invoke-Cli code @('--install-extension',$ext) | Out-Null; if ($LASTEXITCODE -ne 0) { return $false } }
+    return $true
+  }
+}
+if (Needs 'chrome') {
+  Run-Step 'chrome' { Chrome-Installed } { winget install --id Google.Chrome -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; return (Chrome-Installed) }
+  if ($script:KProfile.NEEDS_CLAUDE_CHROME -eq '1') {
+    Run-Step 'chrome-extension' { Find-ClaudeChrome } {
+      Hint 'Chrome ストアで Claude を検索し、追加ボタンを押してください（未確認）'
+      if ((Get-StateStep 'chrome-extension-open') -ne 'ok') { Start-Process 'https://chromewebstore.google.com/search/Claude'; Set-StateStep 'chrome-extension-open' 'ok' }
+      return $false
+    }
+  }
+}
+if (Needs 'clasp') {
+  Run-Step 'clasp' { Have clasp.cmd } { Invoke-Cli npm @('install','-g','@google/clasp') | Out-Null; Refresh-Path; return (Have clasp.cmd) }
+  Run-Step 'clasp-auth' { Test-Path (Join-Path $HOME '.clasprc.json') } { Invoke-Cli clasp @('login') | Out-Host; return ($LASTEXITCODE -eq 0) }
+}
+if (Needs 'gcloud') {
+  Run-Step 'gcloud' { Have gcloud.cmd } { winget install --id Google.CloudSDK -e --accept-package-agreements --accept-source-agreements | Out-Null; Refresh-Path; return (Have gcloud.cmd) }
+  Run-Step 'gcloud-auth' { if (-not (Have gcloud.cmd)) { return $false }; $a=Invoke-Cli gcloud @('auth','list','--filter=status:ACTIVE','--format=value(account)'); return [bool]$a } { Invoke-Cli gcloud @('auth','login') | Out-Host; return ($LASTEXITCODE -eq 0) }
+  Run-Step 'adc' { if (-not (Have gcloud.cmd)) { return $false }; Invoke-Cli gcloud @('auth','application-default','print-access-token') 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } { Invoke-Cli gcloud @('auth','application-default','login') | Out-Host; return ($LASTEXITCODE -eq 0) }
+  Run-Step 'cloud-sql-proxy' { Have cloud-sql-proxy.exe } { Invoke-Cli gcloud @('components','install','cloud-sql-proxy','--quiet') | Out-Null; return ($LASTEXITCODE -eq 0) }
+}
+Run-Step 'skills' { return (-not (Test-Path (Join-Path $script:KHub "profiles\$script:KRole.json"))) } {
+  return (Copy-RoleSkills $script:KHub $script:KRole)
+}
+if ($script:KRole -eq 'somu-keiri') { Hint '総務経理の追加手順: scripts/keiri/onboard.ps1 を参照してください' }
+if (Is-DryRun) { Say '予定の表示を完了しました'; return }
+if (Is-Update) { Say '更新を完了しました'; return }
+$doctorFile=Join-Path $script:KRoot 'doctor\doctor.ps1'
+if (-not (Test-Path $doctorFile)) { try { Invoke-WebRequest "$script:KBase/doctor/doctor.ps1" -OutFile $doctorFile -UseBasicParsing -ErrorAction Stop } catch { Warn 'doctor を取得できませんでした' } }
+if (Test-Path $doctorFile) {
+  $doctorArg='iex ([IO.File]::ReadAllText($env:DAIMARU_DOCTOR_FILE,[Text.Encoding]::UTF8))'
+  $env:DAIMARU_DOCTOR_FILE=$doctorFile
+  $priorRoot=$env:DAIMARU_SETUP_ROOT
+  $env:DAIMARU_SETUP_ROOT=$script:KRoot
+  try { & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $doctorArg } finally { Remove-Item Env:DAIMARU_DOCTOR_FILE -ErrorAction SilentlyContinue; $env:DAIMARU_SETUP_ROOT=$priorRoot }
+}
+if (Test-Path (Join-Path $script:KHub '.git')) {
+  Clear-GwsTemps
+  $workspace=Get-RoleWorkspace $script:KHub $script:KRole
+  if (-not $workspace) { Warn '役割ワークスペースを準備できなかったため、hub で起動します'; $workspace=$script:KHub }
+  Set-Location $workspace
+  if ($script:KTemp) { Remove-Item -Recurse -Force $script:KTemp -ErrorAction SilentlyContinue; $script:KTemp=$null }
+  if (Have-Cli claude) { Invoke-Cli claude @('--permission-mode','acceptEdits') }
+}
+} finally { if ($script:KTemp) { Remove-Item -Recurse -Force $script:KTemp -ErrorAction SilentlyContinue } }
